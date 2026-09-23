@@ -34,8 +34,14 @@ struct SegmentDescriptor {
     uint8_t base_mid;
     uint8_t type_bit   : 4;
     uint8_t non_system : 1;
-    // TODO : Continue SegmentDescriptor definition
-
+    uint8_t privilege  : 2;
+    uint8_t present    : 1;
+    uint8_t limit      : 4;
+    uint8_t available  : 1;
+    uint8_t long_mode  : 1;
+    uint8_t size       : 1;
+    uint8_t granularity: 1;
+    uint8_t base_high;
 } __attribute__((packed));
 
 /**
@@ -58,5 +64,8 @@ struct GDTR {
     uint16_t                     size;
     struct GlobalDescriptorTable *address;
 } __attribute__((packed));
+
+void initialize_gdt(void);
+void load_gdt(struct GDTR *gdtr);
 
 #endif
