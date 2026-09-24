@@ -29,6 +29,7 @@ clean:
 
 kernel:
 	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/kernel-entrypoint.s -o $(OUTPUT_FOLDER)/kernel-entrypoint.o
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/intsetup.s -o $(OUTPUT_FOLDER)/intsetup.o
 	@for file in $$(find $(SOURCE_FOLDER) -name '*.c'); do \
 		object=$(OUTPUT_FOLDER)/$$(basename $$file .c).o; \
 		$(CC) $(CFLAGS) $$file -o $$object; \
