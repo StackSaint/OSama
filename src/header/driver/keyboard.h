@@ -11,7 +11,6 @@
 #define EXT_SCANCODE_LEFT      0x4B
 #define EXT_SCANCODE_RIGHT     0x4D
 
-#define KEYBOARD_IRQ           1
 #define KEYBOARD_DATA_PORT     0x60
 #define EXTENDED_SCANCODE_BYTE 0xE0
 
@@ -42,8 +41,6 @@ struct KeyboardDriverState {
 
 /* -- Driver Interfaces -- */
 
-// Enable IRQ1 on the PIC and activate the keyboard ISR
-void activate_keyboard_interrupt(void);
 
 // Activate keyboard ISR / start listen keyboard & save to buffer
 void keyboard_state_activate(void);

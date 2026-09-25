@@ -1,6 +1,14 @@
 #include "header/cpu/interrupt.h"
 #include "header/cpu/portio.h"
 #include "header/text/framebuffer.h"
+#include "header/driver/keyboard.h"
+
+void activate_keyboard_interrupt(void) {
+    uint8_t mask = in(PIC1_DATA);
+    mask &= ~(1 << IRQ_KEYBOARD);
+    out(PIC1_DATA, mask);
+    keyboard_state_activate();
+}
 
 void io_wait(void) {
     out(0x80, 0);
@@ -38,6 +46,11 @@ void pic_remap(void) {
 
 void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
-        //diisi ama orang 4
+        case PIC1_OFFSET + IRQ_KEYBOARD:
+            keyboard_isr();
+            pic_ack(IRQ_KEYBOARD);
+            break;
+        default:
+            break;
     }
 }
