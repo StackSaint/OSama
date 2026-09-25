@@ -2,7 +2,7 @@
 #include "header/cpu/portio.h"
 #include "header/stdlib/string.h"
 
-struct KeyboardDriverState keyboard_state = {
+static struct KeyboardDriverState keyboard_state = {
     .read_extended_mode = false,
     .keyboard_input_on = false,
     .keyboard_buffer = 0
@@ -27,6 +27,13 @@ const char keyboard_scancode_1_to_ascii_map[256] = {
       0,    0,    0,   0,   0,   0,   0,   0,    0,   0,   0,    0,    0,   0,    0,    0,
       0,    0,    0,   0,   0,   0,   0,   0,    0,   0,   0,    0,    0,   0,    0,    0,
 };
+
+void activate_keyboard_interrupt(void) {
+    uint8_t mask = in(PIC1_DATA);
+    mask &= ~(1 << KEYBOARD_IRQ);
+    out(PIC1_DATA, mask);
+    keyboard_state_activate();
+}
 
 void keyboard_state_activate(void) {
     keyboard_state.keyboard_input_on = true;
