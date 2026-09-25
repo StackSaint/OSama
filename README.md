@@ -1,14 +1,32 @@
 ![Credit: 朧月](mascot.jpg)
 
-# Template Dasar IF2130 Sistem Operasi - 2026/2027
-Template dasar untuk Tugas Besar IF2130 - Sistem Operasi 2026/2027
+# Kelompok OSama
 
-## README Specification
+## Daftar Isi
+- [Kelompok OSama](#kelompok-osama)
+  - [Daftar Isi](#daftar-isi)
+  - [Nama Kelompok \& Anggota](#nama-kelompok--anggota)
+  - [Cara Run](#cara-run)
+  - [Fitur](#fitur)
 
-Pada file README, minimal kalian harus memiliki hal berikut:
+---
 
-- Nama Kelompok
-- Daftar Isi
-- Cara Run
-- Fitur yang Dibuat
-- Maskot Kelompok Kalian
+## Nama Kelompok & Anggota
+
+**Nama Kelompok:** OSama
+
+| Nama | NIM |
+| :--- | :--- |
+| Fathar Atandra Denaya | 13525067 |
+| Rivan Cahyadi | 13525007 |
+| Fabian Amzar Susanto | 13525010 |
+| Sebastio Nugroho | 13525123 |
+
+---
+
+## Cara Run
+```bash
+make build
+qemu-system-i386 -cdrom bin/OSama.iso
+```
+## Fitur
