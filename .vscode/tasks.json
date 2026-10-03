@@ -6,7 +6,7 @@
             "label": "Build OS",
             "command": "make",
             "args": [
-                "build",
+                "build"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -19,7 +19,7 @@
         {
             "type": "shell",
             "label": "Launch QEMU",
-            "command": "echo Starting QEMU&qemu-system-i386 -s -S -cdrom OS2025.iso",
+            "command": "qemu-system-i386 -s -S -cdrom OSama.iso -drive file=storage.bin,format=raw,if=ide,index=0,media=disk",
             "isBackground": true,
             "dependsOn": "Build OS",
             "options": {
@@ -37,7 +37,7 @@
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": ".",
-                    "endsPattern": ".",
+                    "endsPattern": "."
                 }
             }
         },
@@ -46,5 +46,5 @@
             "label": "Exit QEMU",
             "command": "pkill -f qemu || test $? -eq 1"
         }
-    ],
+    ]
 }
