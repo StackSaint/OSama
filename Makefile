@@ -12,20 +12,21 @@ OUTPUT_FOLDER = bin
 ISO_NAME      = OSama
 DISK_NAME     = storage
 DISK_SIZE     = 4M
+DISK_TEST     ?= 0
 
 # Flags
 WARNING_CFLAG = -Wall -Wextra -Werror
 DEBUG_CFLAG   = -fshort-wchar -g
 STRIP_CFLAG   = -nostdlib -fno-stack-protector -nostartfiles -nodefaultlibs -ffreestanding
 
-CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -m32 -c -I$(SOURCE_FOLDER)
+CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SELF_TEST=$(DISK_TEST) -m32 -c -I$(SOURCE_FOLDER)
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
 .PHONY: run all build disk clean kernel iso
 
-run: all
-	@$(QEMU) -s -S \
+run: all $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+	@$(QEMU) \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 
@@ -37,6 +38,12 @@ disk:
 	@mkdir -p $(OUTPUT_FOLDER)
 	@$(QEMU_IMG) create -f raw \
 		$(OUTPUT_FOLDER)/$(DISK_NAME).bin \
+		$(DISK_SIZE)
+
+$(OUTPUT_FOLDER)/$(DISK_NAME).bin:
+	@mkdir -p $(OUTPUT_FOLDER)
+	@$(QEMU_IMG) create -f raw \
+		$@ \
 		$(DISK_SIZE)
 
 clean:
@@ -78,7 +85,7 @@ iso: kernel
 		$(OUTPUT_FOLDER)/iso/boot/grub/
 
 	@cp $(SOURCE_FOLDER)/menu.lst \
-		$(OUTPUT_FOLDER)/iso/boot/
+		$(OUTPUT_FOLDER)/iso/boot/grub/
 
 	@$(GENISOIMAGE) -R \
 		-b boot/grub/grub1 \

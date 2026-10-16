@@ -26,7 +26,27 @@
 
 ## Cara Run
 ```bash
-make build
-qemu-system-i386 -cdrom bin/OSama.iso
+make all
+make run
 ```
+
+`make run` membuat `bin/storage.bin` jika image belum ada, tetapi tidak
+menimpa image yang sudah ada. Untuk membuat image kosong secara sengaja,
+jalankan `make disk`.
+
+### Pengujian Disk Driver
+
+Uji round-trip write/read pada LBA 17 dapat dijalankan dengan:
+
+```bash
+make clean
+make DISK_TEST=1 all
+make run
+```
+
+Test ini menulis satu block (512 byte) ke LBA 17, membacanya kembali, lalu
+membandingkan seluruh isinya. LBA 17 berada pada byte offset `0x2200` di
+`bin/storage.bin`. Jangan gunakan `DISK_TEST=1` setelah filesystem mulai
+menyimpan data karena test tersebut sengaja menimpa block LBA 17.
+
 ## Fitur

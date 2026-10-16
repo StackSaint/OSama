@@ -19,6 +19,13 @@ static void ATA_busy_wait(void) {
     }
 }
 
+static void ATA_400ns_delay(void) {
+    in(ATA_PRIMARY_COMMAND_STATUS);
+    in(ATA_PRIMARY_COMMAND_STATUS);
+    in(ATA_PRIMARY_COMMAND_STATUS);
+    in(ATA_PRIMARY_COMMAND_STATUS);
+}
+
 static void ATA_DRQ_wait(void) {
     while (!(in(ATA_PRIMARY_COMMAND_STATUS) & ATA_STATUS_DRQ)) {
         
@@ -35,6 +42,7 @@ static void ATA_select_sector(
         ATA_DRIVE_MASTER_LBA |
         ((logical_block_address >> 24) & 0x0F)
     );
+    ATA_400ns_delay();
 
     out(ATA_PRIMARY_SECTOR_COUNT, block_count);
     out(ATA_PRIMARY_LBA_LOW,  (uint8_t)(logical_block_address));
