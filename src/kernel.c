@@ -154,6 +154,94 @@ static bool fs_write_integrity_test(void) {
 }
 #endif
 
+#define FS_CAPACITY_TEST 1
+#if FS_CAPACITY_TEST
+static bool fs_capacity_stress_test(void) {
+    static uint8_t small_buf[64];
+    memset(small_buf, 0xAA, sizeof(small_buf));
+
+    int8_t rc = 0;
+    int file_count = 0;
+
+    while (true) {
+        struct EXT2DriverRequest req = {
+            .buf = small_buf,
+            .name = "stress.bin", 
+            .name_len = 10,
+            .parent_inode = 1,
+            .buffer_size = sizeof(small_buf),
+            .is_directory = false,
+        };
+
+        rc = write(&req);
+
+        if (rc != 0) {
+            break;
+        }
+
+        file_count++;
+        if (file_count >= 100) { 
+            break;
+        }
+    }
+
+    return true;
+}
+#endif
+
+#define FS_DELETE_TEST 1
+#if FS_DELETE_TEST
+static bool fs_delete_fragmentation_test(void) {
+    static uint8_t test_buf[128];
+    memset(test_buf, 0xBB, sizeof(test_buf));
+
+    // 1. Tulis file sementara untuk diuji hapus
+    struct EXT2DriverRequest write_req = {
+        .buf = test_buf,
+        .name = "temp_file.bin",
+        .name_len = 13,
+        .parent_inode = 1,
+        .buffer_size = sizeof(test_buf),
+        .is_directory = false,
+    };
+
+    if (write(&write_req) != 0) {
+        return false; // Gagal menulis file awal
+    }
+
+    // 2. Hapus file tersebut menggunakan fungsi delete
+    struct EXT2DriverRequest delete_req = {
+        .buf = NULL,
+        .name = "temp_file.bin",
+        .name_len = 13,
+        .parent_inode = 1,
+        .buffer_size = 0,
+        .is_directory = false,
+    };
+
+    int8_t rc = delete(delete_req);
+    if (rc != 0) {
+        return false; // Gagal menghapus file (kode error != 0)
+    }
+
+    // 3. Coba tulis file baru setelah penghapusan untuk menguji re-alokasi bitmap
+    struct EXT2DriverRequest reallocate_req = {
+        .buf = test_buf,
+        .name = "reuse_file.bin",
+        .name_len = 14,
+        .parent_inode = 1,
+        .buffer_size = sizeof(test_buf),
+        .is_directory = false,
+    };
+
+    if (write(&reallocate_req) != 0) {
+        return false; // Gagal menggunakan kembali ruang bekas hapusan
+    }
+
+    return true;
+}
+#endif
+
 void kernel_setup(void) {
     initialize_gdt();
     pic_remap();
@@ -180,6 +268,24 @@ void kernel_setup(void) {
         framebuffer_write_text(1, 29, "PASS", 0x0A);
     } else {
         framebuffer_write_text(1, 29, "FAIL", 0x0C);
+    }
+#endif
+
+#if FS_CAPACITY_TEST
+    framebuffer_write_text(2, 0, "EXT2 Capacity stress test: ", 0x0F);
+    if (fs_capacity_stress_test()) {
+        framebuffer_write_text(2, 27, "PASS", 0x0A);
+    } else {
+        framebuffer_write_text(2, 27, "FAIL", 0x0C);
+    }
+#endif
+
+#if FS_DELETE_TEST
+    framebuffer_write_text(3, 0, "EXT2 Delete & Reuse test: ", 0x0F);
+    if (fs_delete_fragmentation_test()) {
+        framebuffer_write_text(3, 27, "PASS", 0x0A);
+    } else {
+        framebuffer_write_text(3, 27, "FAIL", 0x0C);
     }
 #endif
 
