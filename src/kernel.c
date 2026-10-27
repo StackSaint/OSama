@@ -8,6 +8,7 @@
 #include "header/filesystem/ext2.h"
 #include "header/stdlib/string.h"
 #include "header/text/framebuffer.h"
+#include "header/memory/paging.h"
 
 static void framebuffer_write_text(
     uint8_t row,
