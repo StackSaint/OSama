@@ -35,6 +35,17 @@ Untuk compile kernel dan membuat ISO:
 make build
 ```
 
+Untuk membuat flat binary user program dan memasukkannya ke root filesystem:
+
+```bash
+make insert-shell
+```
+
+Target tersebut membuat `bin/shell`, membangun host-side EXT2 inserter, dan
+menulis program bernama `shell` ke `bin/storage.bin`. Kernel kemudian memuat
+program itu ke user space, memasang TSS, dan berpindah ke Ring 3 melalui
+`iret`.
+
 Cara yang disarankan untuk menjalankan OS:
 
 ```bash
@@ -63,6 +74,8 @@ jalankan `make disk`.
 
 - Inisialisasi kernel 32-bit dengan GDT, IDT, dan remapping PIC.
 - Driver keyboard berbasis interrupt untuk input karakter.
+- GDT user code/data descriptor, TSS, dan transisi kernel ke Ring 3.
+- Flat binary user program serta host-side inserter untuk EXT2.
 - Output teks melalui VGA text framebuffer 80×25, termasuk cursor dan
   scrolling.
 - Driver disk ATA PIO untuk membaca dan menulis block.

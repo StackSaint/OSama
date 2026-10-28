@@ -2,6 +2,17 @@
 #include "header/cpu/portio.h"
 #include "header/text/framebuffer.h"
 #include "header/driver/keyboard.h"
+#include "header/cpu/gdt.h"
+
+struct TSSEntry _interrupt_tss_entry = {
+    .ss0 = GDT_KERNEL_DATA_SEGMENT_SELECTOR,
+};
+
+void set_tss_kernel_current_stack(void) {
+    uint32_t stack_ptr;
+    __asm__ volatile ("mov %%ebp, %0" : "=r"(stack_ptr));
+    _interrupt_tss_entry.esp0 = stack_ptr + 8;
+}
 
 void activate_keyboard_interrupt(void) {
     uint8_t mask = in(PIC1_DATA);

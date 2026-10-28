@@ -83,10 +83,7 @@ struct PageTableEntryFlag {
  */
 struct PageDirectoryEntry {
     struct PageDirectoryEntryFlag flag;
-    uint16_t global_page      : 1;
-    uint16_t ignored          : 3;
-    uint16_t reserved         : 1;
-    uint16_t reserved2        : 1;
+    uint32_t ignored          : 4;
     uint32_t lower_address    : 20;
 }__attribute__((packed));
 
@@ -105,10 +102,8 @@ struct PageDirectoryEntry {
  */
 struct PageTableEntry {
     struct PageTableEntryFlag flag;
-    uint16_t global_page      : 1;
-    uint16_t ignored          : 3;
-    uint16_t page_attr_table  : 1;
-    uint16_t reserved         : 1;
+    uint32_t global_page      : 1;
+    uint32_t ignored          : 3;
     uint32_t lower_address    : 20;
 }__attribute__((packed));
 
@@ -152,7 +147,7 @@ struct PageManagerState {
  * @param virtual_addr  Virtual address to map
  * @param flag          Page entry flags
  */
-void update_page_directory_entry(
+bool update_page_directory_entry(
     struct PageDirectory *page_dir,
     void *physical_addr, 
     void *virtual_addr, 

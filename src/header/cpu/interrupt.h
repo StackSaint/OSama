@@ -125,7 +125,16 @@ struct InterruptFrame {
     struct InterruptStack int_stack;
 } __attribute__((packed));
 
+struct TSSEntry {
+    uint32_t prev_tss;
+    uint32_t esp0;
+    uint32_t ss0;
+    uint32_t unused_register[23];
+} __attribute__((packed));
 
+extern struct TSSEntry _interrupt_tss_entry;
+
+void set_tss_kernel_current_stack(void);
 
 // Activate PIC mask for keyboard only
 void activate_keyboard_interrupt(void);

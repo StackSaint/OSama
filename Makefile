@@ -24,7 +24,7 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run all build disk clean kernel iso
+.PHONY: run all build disk clean kernel iso user-shell inserter insert-shell
 
 run: all $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 	@$(QEMU) \
@@ -95,3 +95,23 @@ iso: kernel
 		-boot-info-table \
 		-o $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		$(OUTPUT_FOLDER)/iso
+
+user-shell:
+	@mkdir -p $(OUTPUT_FOLDER)
+	@$(ASM) $(AFLAGS) user/crt0.s -o $(OUTPUT_FOLDER)/user-crt0.o
+	@$(CC) $(CFLAGS) -fno-pie user/user-shell.c -o $(OUTPUT_FOLDER)/user-shell.o
+	@$(LIN) -T user/user-linker.ld -melf_i386 --oformat=binary \
+		$(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-shell.o \
+		-o $(OUTPUT_FOLDER)/shell
+	@$(LIN) -T user/user-linker.ld -melf_i386 --oformat=elf32-i386 \
+		$(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-shell.o \
+		-o $(OUTPUT_FOLDER)/shell_elf
+	@rm -f $(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-shell.o
+
+inserter:
+	@$(CC) -std=c11 -Wall -Wextra -Werror -I$(SOURCE_FOLDER) \
+		tools/external-inserter.c $(SOURCE_FOLDER)/filesystem/ext2.c \
+		$(SOURCE_FOLDER)/stdlib/string.c -o $(OUTPUT_FOLDER)/inserter
+
+insert-shell: inserter user-shell $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER) && ./inserter shell 1 $(DISK_NAME).bin

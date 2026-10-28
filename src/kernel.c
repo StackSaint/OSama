@@ -9,6 +9,7 @@
 #include "header/stdlib/string.h"
 #include "header/text/framebuffer.h"
 #include "header/memory/paging.h"
+#include "header/kernel-entrypoint.h"
 
 static void framebuffer_write_text(
     uint8_t row,
@@ -165,6 +166,34 @@ void kernel_setup(void) {
     framebuffer_set_cursor(0, 0);
     framebuffer_write_text(0, 0, "OSama kernel started", 0x0F);
     initialize_filesystem_ext2();
+    gdt_install_tss();
+    set_tss_register();
+
+    for (uint32_t address = 0;
+         address < 0x100000;
+         address += PAGE_FRAME_SIZE) {
+        paging_allocate_user_page_frame(
+            &_paging_kernel_page_directory,
+            (void *)address
+        );
+    }
+    paging_allocate_user_page_frame(
+        &_paging_kernel_page_directory,
+        (void *)0x3FF000
+    );
+
+    struct EXT2DriverRequest shell_request = {
+        .buf = (void *)0,
+        .name = "shell",
+        .name_len = 5,
+        .parent_inode = 1,
+        .buffer_size = 0x100000,
+        .is_directory = false,
+    };
+    if (read(shell_request) == 0) {
+        set_tss_kernel_current_stack();
+        kernel_execute_user_program((void *)0);
+    }
 
 #if DISK_DRIVER_SELF_TEST
     framebuffer_write_text(1, 0, "Disk LBA 17 test: ", 0x0F);
