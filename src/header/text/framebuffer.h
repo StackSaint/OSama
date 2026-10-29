@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define FRAMEBUFFER_MEMORY_OFFSET ((uint8_t*) 0xB8000)
+#define FRAMEBUFFER_MEMORY_OFFSET ((uint8_t*) 0xC00B8000)
 
 #define FRAMEBUFFER_WIDTH  80
 #define FRAMEBUFFER_HEIGHT 25

@@ -2,12 +2,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "header/memory/paging.h"
+#include "header/memory/swap.h"
 /**
  * _paging_kernel_page_directory and _paging_kernel_page_table is initialized on kernel-entrypoint.s
  */
 __attribute__((aligned(0x1000))) struct PageDirectory _paging_kernel_page_directory;
 
 __attribute__((aligned(0x1000))) struct PageTable _paging_kernel_page_table;
+
+__attribute__((aligned(0x1000))) static struct PageTable _paging_user_low_page_table;
 
 /**
  * Global page frame manager state tracking free/busy frames.
@@ -25,8 +28,41 @@ struct PageTable *paging_get_page_table(struct PageDirectory *page_dir, uint32_t
 
     struct PageDirectoryEntry *dir_entry = &page_dir->table[page_directory_index];
 
+    if (page_directory_index == 0 &&
+        dir_entry->flag.present_bit &&
+        dir_entry->lower_address == page_dir->table[768].lower_address) {
+        for (uint32_t i = 0; i < PAGE_ENTRY_COUNT; i++) {
+            if (i >= 256 && i < 1023) {
+                _paging_user_low_page_table.table[i] = _paging_kernel_page_table.table[i];
+            } else {
+                _paging_user_low_page_table.table[i] = (struct PageTableEntry){0};
+            }
+        }
+        uint32_t low_pt_phys = (uint32_t)&_paging_user_low_page_table & ~0xC0000000u;
+        dir_entry->flag = (struct PageDirectoryEntryFlag) {
+            .present_bit     = true,
+            .write_bit       = true,
+            .user_supervisor = true,
+        };
+        dir_entry->lower_address = low_pt_phys >> 12;
+
+        struct PageTable *page_table = (struct PageTable *)(RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS + page_directory_index * PAGE_FRAME_SIZE);
+        flush_single_tlb(page_table);
+        for (uint32_t addr = 0; addr < 0x100000u; addr += PAGE_FRAME_SIZE) {
+            flush_single_tlb((void *)addr);
+        }
+        flush_single_tlb((void *)0x3FF000u);
+        return page_table;
+    }
+
     if (dir_entry->flag.present_bit) {
         return (struct PageTable *)(RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS + page_directory_index * PAGE_FRAME_SIZE);
+    }
+
+    if (!paging_allocate_check(PAGE_FRAME_SIZE)) {
+        if (!swap_evict_page(page_dir, (void *)(page_directory_index << 22))) {
+            return NULL;
+        }
     }
 
     for (uint32_t page_frame_number = KERNEL_RESERVED_PAGE_FRAME_COUNT;
@@ -68,7 +104,12 @@ bool update_page_directory_entry(
     struct PageTable *page_table = paging_get_page_table(page_dir, page_directory_index);
     if (page_table == NULL) return false;
 
+    if (flag.user_supervisor) {
+        page_dir->table[page_directory_index].flag.user_supervisor = true;
+    }
+
     page_table->table[page_table_index].flag = flag;
+    page_table->table[page_table_index].ignored = 0;
     page_table->table[page_table_index].lower_address = ((uint32_t) physical_addr >> 12);
     flush_single_tlb(virtual_addr);
     return true;
@@ -102,15 +143,19 @@ bool paging_allocate_user_page_frame(struct PageDirectory *page_dir, void *virtu
     uint32_t page_directory_index = ((uint32_t)virtual_addr >> 22) & 0x3FF;
     uint32_t page_table_index = ((uint32_t)virtual_addr >> 12) & 0x3FF;
 
-    struct PageDirectoryEntry *dir_entry = &page_dir->table[page_directory_index];
-    if (dir_entry->flag.present_bit) {
-        struct PageTable *page_table = (struct PageTable *)(RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS + page_directory_index * PAGE_FRAME_SIZE);
-        if (page_table->table[page_table_index].flag.present_bit) {
+    struct PageTable *page_table = paging_get_page_table(page_dir, page_directory_index);
+    if (page_table == NULL) return false;
+
+    if (page_table->table[page_table_index].flag.present_bit ||
+        swap_is_page_swapped_out(page_dir, virtual_addr)) {
+        return false;
+    }
+
+    if (!paging_allocate_check(PAGE_FRAME_SIZE)) {
+        if (!swap_evict_page(page_dir, virtual_addr)) {
             return false;
         }
     }
-
-    if (!paging_allocate_check(PAGE_FRAME_SIZE)) return false;
 
     uint32_t physical_frame_index = 0;
     bool found = false;
@@ -142,6 +187,13 @@ bool paging_allocate_user_page_frame(struct PageDirectory *page_dir, void *virtu
         return false;
     }
 
+    volatile uint8_t *page_ptr = (volatile uint8_t *)((uint32_t)virtual_addr & ~(PAGE_FRAME_SIZE - 1u));
+    for (uint32_t i = 0; i < PAGE_FRAME_SIZE; i++) {
+        page_ptr[i] = 0;
+    }
+
+    swap_track_page_allocated(page_dir, virtual_addr, physical_frame_index);
+
     return true;
 }
 
@@ -170,8 +222,19 @@ bool paging_free_user_page_frame(struct PageDirectory *page_dir, void *virtual_a
         // Remove entry
         struct PageTableEntryFlag empty_flags = {0};
         page_table->table[page_table_index].flag = empty_flags;
+        page_table->table[page_table_index].ignored = 0;
         page_table->table[page_table_index].lower_address = 0;
+        swap_track_page_freed(page_dir, virtual_addr);
         
+        flush_single_tlb(virtual_addr);
+        return true;
+    } else if (swap_is_page_swapped_out(page_dir, virtual_addr)) {
+        struct PageTableEntryFlag empty_flags = {0};
+        page_table->table[page_table_index].flag = empty_flags;
+        page_table->table[page_table_index].ignored = 0;
+        page_table->table[page_table_index].lower_address = 0;
+        swap_track_page_freed(page_dir, virtual_addr);
+
         flush_single_tlb(virtual_addr);
         return true;
     }

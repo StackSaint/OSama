@@ -9,6 +9,7 @@
 #include "header/stdlib/string.h"
 #include "header/text/framebuffer.h"
 #include "header/memory/paging.h"
+#include "header/memory/swap.h"
 #include "header/kernel-entrypoint.h"
 
 static void framebuffer_write_text(
@@ -182,6 +183,13 @@ void kernel_setup(void) {
         (void *)0x3FF000
     );
 
+    framebuffer_write_text(2, 0, "Swap & Page Fault (0xE) test: ", 0x0F);
+    if (swap_self_test()) {
+        framebuffer_write_text(2, 30, "PASS", 0x0A);
+    } else {
+        framebuffer_write_text(2, 30, "FAIL", 0x0C);
+    }
+
     struct EXT2DriverRequest shell_request = {
         .buf = (void *)0,
         .name = "shell",
@@ -213,7 +221,7 @@ void kernel_setup(void) {
     }
 #endif
 
-    uint16_t cursor = 2 * FRAMEBUFFER_WIDTH;
+    uint16_t cursor = 3 * FRAMEBUFFER_WIDTH;
     uint16_t line_start = cursor;
     keyboard_state_activate();
     while (true) {

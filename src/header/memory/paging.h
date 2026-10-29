@@ -139,6 +139,8 @@ struct PageManagerState {
     uint32_t free_page_frame_count;
 } __attribute__((packed));
 
+extern struct PageManagerState page_manager_state;
+
 /**
  * Edit page directory with respective parameter
  * 
