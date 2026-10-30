@@ -4,6 +4,8 @@
 #include "header/driver/keyboard.h"
 #include "header/cpu/gdt.h"
 #include "header/memory/swap.h"
+#include "header/filesystem/ext2.h"
+#include "header/syscall/syscall.h"
 
 struct TSSEntry _interrupt_tss_entry = {
     .ss0 = GDT_KERNEL_DATA_SEGMENT_SELECTOR,
@@ -65,7 +67,37 @@ void main_interrupt_handler(struct InterruptFrame frame) {
             keyboard_isr();
             pic_ack(IRQ_KEYBOARD);
             break;
+        case 0x30:
+            syscall(frame);
+            break;
         default:
+            break;
+    }
+}
+
+void syscall(struct InterruptFrame frame) {
+    switch (frame.cpu.general.eax) {
+        case 0: {
+            *(int8_t*) frame.cpu.general.ecx = read(
+                *(struct EXT2DriverRequest*) frame.cpu.general.ebx
+            );
+            break;
+        }
+        case 4: {
+            get_keyboard_buffer((char*) frame.cpu.general.ebx);
+            break;
+        }
+        case 6: {
+            char *str = (char*) frame.cpu.general.ebx;
+            uint8_t color = (uint8_t) frame.cpu.general.ecx;
+            while (*str) {
+                framebuffer_write_char(*str, color);
+                str++;
+            }
+            break;
+        }
+        default:
+            frame.cpu.general.eax = -1;
             break;
     }
 }
