@@ -1200,12 +1200,9 @@ int8_t read(struct EXT2DriverRequest request)
     if (request.buffer_size < target_inode.i_size) {
         return ERR_BUFFER_INSUFFICIENT;
     }
-    if (target_inode.i_size != 0 && request.buf == NULL) {
-        return ERR_UNKNOWN;
-    }
 
     uint32_t remaining = target_inode.i_size;
-    uint8_t *destination = request.buf;
+    volatile uint8_t *destination = (volatile uint8_t *)request.buf;
     for (uint32_t index = 0; remaining != 0; index++) {
         uint32_t block = get_inode_data_block(&target_inode, index);
         if (block == 0 || block >= DISK_SPACE / BLOCK_SIZE) {
@@ -1214,7 +1211,9 @@ int8_t read(struct EXT2DriverRequest request)
         struct BlockBuffer buffer;
         read_blocks(&buffer, block, 1);
         uint32_t bytes = remaining < BLOCK_SIZE ? remaining : BLOCK_SIZE;
-        memcpy(destination, buffer.buf, bytes);
+        for (uint32_t b = 0; b < bytes; b++) {
+            destination[b] = buffer.buf[b];
+        }
         destination += bytes;
         remaining -= bytes;
     }

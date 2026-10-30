@@ -26,7 +26,7 @@ LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
 .PHONY: run all build disk clean kernel iso user-shell inserter insert-shell
 
-run: all $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+run: all insert-shell
 	@$(QEMU) \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
@@ -64,7 +64,7 @@ kernel:
 		$(SOURCE_FOLDER)/intsetup.s \
 		-o $(OUTPUT_FOLDER)/intsetup.o
 
-	@for file in $$(find $(SOURCE_FOLDER) -name '*.c'); do \
+	@set -e; for file in $$(find $(SOURCE_FOLDER) -name '*.c'); do \
 		object=$(OUTPUT_FOLDER)/$$(basename $$file .c).o; \
 		$(CC) $(CFLAGS) $$file -o $$object; \
 	done

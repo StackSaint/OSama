@@ -17,8 +17,9 @@ void set_interrupt_gate(uint8_t int_vector, void *handler_address, uint16_t gdt_
     idt_int_gate->offset_high = (uint16_t) ((handler >> 16) & 0xFFFF);
 }
 void initialize_idt(void) {
-    for (int i = 0; i < 256; i++) {
-        set_interrupt_gate(i, isr_stub_table[i], GDT_KERNEL_CODE_SEGMENT_SELECTOR, 0);
+    for (int i = 0; i < 64; i++) {
+        uint8_t privilege = (i == 0x30) ? 0x3 : 0;
+        set_interrupt_gate(i, isr_stub_table[i], GDT_KERNEL_CODE_SEGMENT_SELECTOR, privilege);
     }
     
     _idt_idtr.size = sizeof(struct InterruptDescriptorTable) - 1;

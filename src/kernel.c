@@ -183,6 +183,24 @@ void kernel_setup(void) {
         (void *)0x3FF000
     );
 
+#if DISK_DRIVER_SELF_TEST
+    framebuffer_write_text(1, 0, "Disk LBA 17 test: ", 0x0F);
+    if (disk_round_trip_test()) {
+        framebuffer_write_text(1, 19, "PASS", 0x0A);
+    } else {
+        framebuffer_write_text(1, 19, "FAIL", 0x0C);
+    }
+#endif
+
+#if FS_SELF_TEST
+    framebuffer_write_text(1, 0, "EXT2 Write & Integrity test: ", 0x0F);
+    if (fs_write_integrity_test()) {
+        framebuffer_write_text(1, 29, "PASS", 0x0A);
+    } else {
+        framebuffer_write_text(1, 29, "FAIL", 0x0C);
+    }
+#endif
+
     framebuffer_write_text(2, 0, "Swap & Page Fault (0xE) test: ", 0x0F);
     if (swap_self_test()) {
         framebuffer_write_text(2, 30, "PASS", 0x0A);
@@ -202,24 +220,6 @@ void kernel_setup(void) {
         set_tss_kernel_current_stack();
         kernel_execute_user_program((void *)0);
     }
-
-#if DISK_DRIVER_SELF_TEST
-    framebuffer_write_text(1, 0, "Disk LBA 17 test: ", 0x0F);
-    if (disk_round_trip_test()) {
-        framebuffer_write_text(1, 19, "PASS", 0x0A);
-    } else {
-        framebuffer_write_text(1, 19, "FAIL", 0x0C);
-    }
-#endif
-
-#if FS_SELF_TEST
-    framebuffer_write_text(1, 0, "EXT2 Write & Integrity test: ", 0x0F);
-    if (fs_write_integrity_test()) {
-        framebuffer_write_text(1, 29, "PASS", 0x0A);
-    } else {
-        framebuffer_write_text(1, 29, "FAIL", 0x0C);
-    }
-#endif
 
     uint16_t cursor = 3 * FRAMEBUFFER_WIDTH;
     uint16_t line_start = cursor;
