@@ -17,12 +17,16 @@
 // Page Frame (PF) Size: 4 KiB
 #define PAGE_FRAME_SIZE      0x1000u
 
+#define KERNEL_VIRTUAL_ADDRESS_BASE 0xC0000000u
 #define KERNEL_RESERVED_PAGE_FRAME_COUNT (0x400000u / PAGE_FRAME_SIZE)
 #define RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS 0xFFC00000u
 #define RECURSIVE_PAGE_DIRECTORY_INDEX 1023u
 
 // Maximum usable page frame. Default count: 128 MiB / 4 KiB = 32768 frames
 #define PAGE_FRAME_MAX_COUNT ((SYSTEM_MEMORY_MB << 20) / PAGE_FRAME_SIZE)
+
+/* Maximum number of process page directories kept by the kernel. */
+#define PAGING_DIRECTORY_TABLE_MAX_COUNT 32
 
 // kernel's  page directory, using 4 KiB pages
 extern struct PageDirectory _paging_kernel_page_directory;
@@ -200,5 +204,36 @@ bool paging_allocate_user_page_frame(struct PageDirectory *page_dir, void *virtu
  * @return              Will return true if success, false otherwise
  */
 bool paging_free_user_page_frame(struct PageDirectory *page_dir, void *virtual_addr);
+
+/* --- Process-related Memory Management --- */
+/**
+ * Allocate an empty page directory with the kernel higher-half mapping.
+ *
+ * The returned address is a kernel virtual address. User mappings are
+ * intentionally left empty so each process receives an isolated address
+ * space.
+ */
+struct PageDirectory* paging_create_new_page_directory(void);
+
+/**
+ * Release a page directory allocated by paging_create_new_page_directory().
+ *
+ * The kernel page directory and arbitrary pointers are rejected. The
+ * directory contents are cleared before its slot is made reusable.
+ */
+bool paging_free_page_directory(struct PageDirectory *page_dir);
+
+/**
+ * Read the page directory currently loaded in CR3 as a kernel virtual address.
+ */
+struct PageDirectory* paging_get_current_page_directory_addr(void);
+
+/**
+ * Load a page directory into CR3.
+ *
+ * The argument may be either a kernel virtual address or its corresponding
+ * physical address; kernel virtual addresses are converted automatically.
+ */
+void paging_use_page_directory(struct PageDirectory *page_dir_virtual_addr);
 
 #endif
