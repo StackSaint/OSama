@@ -14,7 +14,6 @@
 #include "header/scheduler/scheduler.h"
 #include "header/kernel-entrypoint.h"
 #include "header/cpu/portio.h"
-#include "header/driver/pc_speaker.h"
 
 static void framebuffer_write_text(
     uint8_t row,
@@ -75,7 +74,6 @@ static void show_boot_splash_screen(void) {
     }
 
     framebuffer_write_text(19, 22, "System Ready. Launching User Shell... ", 0x0F);
-    pc_speaker_boot_melody();
     boot_delay_loops(8000000u);
     framebuffer_clear();
     framebuffer_set_cursor(0, 0);
@@ -238,8 +236,6 @@ void kernel_setup(void) {
     initialize_idt();
     activate_keyboard_interrupt();
     scheduler_init();
-    pit_initialize();
-    pc_speaker_init();
 
     color_palette();
     framebuffer_clear();
@@ -248,6 +244,7 @@ void kernel_setup(void) {
     gdt_install_tss();
     set_tss_register();
     show_boot_splash_screen();
+    pit_initialize();
 
     for (uint32_t address = 0;
          address < 0x100000;

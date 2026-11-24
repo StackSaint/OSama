@@ -4,15 +4,22 @@
 #include "header/driver/cmos.h"
 
 #define COLOR_GREEN      0x02
+#define COLOR_DARK_GRAY  0x08
+#define COLOR_LIGHT_GRAY 0x07
+#define COLOR_RED        0x04
+#define COLOR_WHITE      0x0F
 
-/* VGA text mode: 80 kolom x 25 baris. Jam ditempatkan di baris paling
- * bawah, kolom kanan (80 - 8 = 72 untuk "HH:MM:SS"). */
-#define FRAMEBUFFER_ROW   24u
-#define FRAMEBUFFER_COL   72u
-#define GMT_OFFSET_HOURS  8u
-#define CLOCK_UPDATE_MS   1000u
+/* Update interval in milliseconds (PIT runs at 1000 Hz). */
+#define CLOCK_UPDATE_MS  1000u
 
-static void print_number_at(uint8_t col, uint32_t number, uint8_t width, uint8_t color) {
+static void print_text(const char *text, uint8_t color) {
+    while (*text != '\0') {
+        sys_putchar(*text++, color);
+    }
+}
+
+/* Cetak angka desimal dengan minimal `width` digit (diisi '0' di depan). */
+static void print_number(uint32_t number, uint8_t width, uint8_t color) {
     char digits[11];
     uint32_t count = 0;
     do {
@@ -21,38 +28,11 @@ static void print_number_at(uint8_t col, uint32_t number, uint8_t width, uint8_t
     } while (number != 0 && count < sizeof(digits));
 
     while (width > count) {
-        sys_fb_putchar(FRAMEBUFFER_ROW, col, '0', color);
-        col++;
+        sys_putchar('0', color);
         width--;
     }
     while (count != 0) {
-        sys_fb_putchar(FRAMEBUFFER_ROW, col, digits[--count], color);
-        col++;
-    }
-}
-
-static uint8_t days_in_month(uint16_t year, uint8_t month) {
-    static const uint8_t dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
-        return 29;
-    }
-    return dim[month - 1];
-}
-
-/* Ubah waktu UTC dari CMOS/RTC menjadi GMT+8 (WIB). */
-static void apply_gmt8(struct RTCTime *t) {
-    t->hour += (uint8_t)GMT_OFFSET_HOURS;
-    if (t->hour >= 24) {
-        t->hour -= 24;
-        t->day++;
-        if (t->day > days_in_month(t->year, t->month)) {
-            t->day = 1;
-            t->month++;
-            if (t->month > 12) {
-                t->month = 1;
-                t->year++;
-            }
-        }
+        sys_putchar(digits[--count], color);
     }
 }
 
@@ -62,35 +42,47 @@ static uint32_t sys_get_time_ms(void) {
 
 int main(void) {
     struct RTCTime now;
-    uint8_t last_second = 0xFF;
 
     if (sys_get_rtc(&now) != 0) {
+        print_text("clock: cannot read CMOS/RTC\n", COLOR_RED);
+        sys_exit();
         return 1;
     }
+
+    /* Cetak tanggal sekali di awal. */
+    print_text("Date: ", COLOR_DARK_GRAY);
+    print_number(now.year, 4, COLOR_LIGHT_GRAY);
+    sys_putchar('-', COLOR_LIGHT_GRAY);
+    print_number(now.month, 2, COLOR_LIGHT_GRAY);
+    sys_putchar('-', COLOR_LIGHT_GRAY);
+    print_number(now.day, 2, COLOR_LIGHT_GRAY);
+    sys_putchar('\n', COLOR_LIGHT_GRAY);
+
+    /*
+     * Loop selamanya: baca RTC lalu gambar ulang jam:menit:detik di baris
+     * yang sama memakai '\r' (carriage return) supaya tidak ikut menggeser
+     * layar. Proses ini berjalan sebagai user process terpisah dan
+     * ter-preempt oleh scheduler, jadi shell tetap bisa dipakai. Hentikan
+     * dengan command `kill <pid>`.
+     */
     uint32_t last_tick = sys_get_time_ms();
-
-    /* Gambar ulang jam:menit:detik di pojok kanan bawah layar setiap kali
-     * detik berubah, tanpa mencetak ke baris terminal, sehingga shell tetap
-     * dapat dipakai seperti biasa. Hentikan dengan `kill <pid>`. */
     while (true) {
+        char key = sys_getkey();
+        if ((uint8_t)key == 0x03u) {
+            print_text("\nclock: stopped\n", COLOR_DARK_GRAY);
+            sys_exit();
+            return 0;
+        }
         if (sys_get_rtc(&now) == 0) {
-            apply_gmt8(&now);
-            if (now.second != last_second) {
-                last_second = now.second;
-                uint8_t col = FRAMEBUFFER_COL;
-
-                print_number_at(col, now.hour, 2, COLOR_GREEN);
-                col += 2;
-                sys_fb_putchar(FRAMEBUFFER_ROW, col, ':', COLOR_GREEN);
-                col++;
-                print_number_at(col, now.minute, 2, COLOR_GREEN);
-                col += 2;
-                sys_fb_putchar(FRAMEBUFFER_ROW, col, ':', COLOR_GREEN);
-                col++;
-                print_number_at(col, now.second, 2, COLOR_GREEN);
-            }
+            sys_putchar('\r', COLOR_WHITE);
+            print_number(now.hour, 2, COLOR_GREEN);
+            sys_putchar(':', COLOR_GREEN);
+            print_number(now.minute, 2, COLOR_GREEN);
+            sys_putchar(':', COLOR_GREEN);
+            print_number(now.second, 2, COLOR_GREEN);
         }
 
+        /* Tunggu ~1 detik; busy-wait ini tetap ter-preempt scheduler. */
         while (sys_get_time_ms() - last_tick < CLOCK_UPDATE_MS) {
         }
         last_tick += CLOCK_UPDATE_MS;
