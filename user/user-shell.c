@@ -47,7 +47,7 @@ static uint32_t command_history_count = 0;
 static uint32_t command_history_position = 0;
 static char autocomplete_candidates[AUTOCOMPLETE_MAX_CANDIDATES][MAX_PATH_SIZE];
 
-static char pipe_buffer[512];
+static char pipe_buffer[4096];
 static uint32_t pipe_pos = 0;
 static bool pipe_mode = false;
 static bool pipe_truncated = false;
@@ -232,7 +232,7 @@ static int32_t search_path(const char *cmd, char *out_path,
         for (uint32_t i = 0; i < dir_len && total + 1u < out_size; i++) {
             out_path[total++] = dir[i];
         }
-        if (total + 1u < out_size && dir[dir_len - 1] != '/') {
+        if (dir_len > 0 && total + 1u < out_size && dir[dir_len - 1] != '/') {
             out_path[total++] = '/';
         }
         uint32_t cmd_len = text_length(cmd);
@@ -308,7 +308,7 @@ static void command_export(uint32_t argc, char *argv[]) {
                 found = true;
                 continue;
             }
-            if (nlen > 0) {
+            if (nlen > 0 && nlen + 1u < MAX_PATH_SIZE) {
                 new_path[nlen++] = ':';
             }
             for (uint32_t i = 0; comp[i] != '\0' && nlen + 1u < MAX_PATH_SIZE;
@@ -335,7 +335,7 @@ static void path_save(void) {
         return;
     }
     uint32_t len = path_env_len;
-    if (len == 0 || len > MAX_FILE_SIZE) {
+    if (len > MAX_FILE_SIZE) {
         return;
     }
     /* write() refuses to overwrite an existing file, so delete it first. */
@@ -348,7 +348,9 @@ static void path_save(void) {
         .is_directory = false,
     };
     call_syscall(SYS_DELETE, (uint32_t)&request, 0, 0);
-    write_file(parent_inode, name, (const uint8_t *)path_env, len);
+    if (len > 0) {
+        write_file(parent_inode, name, (const uint8_t *)path_env, len);
+    }
 }
 
 static void path_load(void) {
@@ -1803,7 +1805,7 @@ static void parse_and_execute(char *line) {
         if (!is_last) {
             pipe_mode = false;
             if (pipe_truncated) {
-                print_text_color("warning: pipe output cut at 511 bytes\n",
+                print_text_color("warning: pipe output cut at 4095 bytes\n",
                                  COLOR_YELLOW);
             }
         }

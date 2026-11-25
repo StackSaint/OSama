@@ -92,31 +92,42 @@ jalankan `make disk`.
 Setelah OS boot, perintah berikut tersedia:
 
 ```text
-help
-clear
-ls [path]
-cd [path]
-mkdir path
-rmdir path
-cat file
-cp source destination
-mv source destination
-rm file
-find [path] [pattern]
-grep pattern file
-ps
-kill pid
-exec file
-time
-exit
+help                     show help
+clear                    clear the screen
+ls [path]                list a directory
+cd [path]                change directory (default: /)
+mkdir path               create a directory
+rmdir path               remove an empty directory
+cat file                 print a file (up to 8192 bytes)
+cp source destination    copy a file (overwrites existing destination)
+mv source destination    move/rename a file or folder
+rm file                  remove a file
+find [path] [pattern]    search directory tree
+grep pattern [file]      print matching lines (no file: piped input)
+ps                       list processes
+kill pid|name            terminate a process
+exec file [args...]      run a flat binary with argc/argv
+time                     show current date and time
+uptime                   show uptime in ms
+shutdown                 power off system (ACPI 0x604)
+exit                     exit this process
+export [add|remove] dir  manage PATH directories
+name [args...]           run a program found in PATH
+cmd1 | cmd2              pipe output, e.g. ls | grep sh
+file.sh                  run a shell script (up to 3 levels of nesting)
 ```
 
+**User programs** (located in `/bin`): `echo`, `hello`, `clock`.
+
 `find` mencocokkan pola sebagai substring pada nama/path dan membatasi
-penelusuran hingga 8 tingkat direktori. `cat`, `cp`, `mv`, dan `grep` mendukung
-file sampai 8192 byte; `cp`/`mv` hanya menangani file non-kosong dan tidak
-menimpa tujuan yang sudah ada. `rmdir` hanya berhasil untuk direktori kosong.
-Pembacaan/listing direktori dibatasi hingga 1024 byte. Path dibatasi hingga 127
+penelusuran hingga 8 tingkat direktori. `cat`, `cp`, dan `grep` mendukung
+file sampai 8192 byte; `cp` menimpa file tujuan yang sudah ada. `mv` mendukung
+file maupun folder. `rmdir` hanya berhasil untuk direktori kosong.
+Pembacaan/listing direktori dibatasi hingga 2048 byte. Path dibatasi hingga 127
 karakter.
+
+**Keyboard shortcuts:** Up/Down (command history), PageUp/PageDown (scroll),
+Tab (autocomplete commands and paths), Ctrl+C (cancel current line).
 
 
 ```bash

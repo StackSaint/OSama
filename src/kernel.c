@@ -252,15 +252,20 @@ void kernel_setup(void) {
     for (uint32_t address = 0;
          address < 0x100000;
          address += PAGE_FRAME_SIZE) {
+        if (!paging_allocate_check(PAGE_FRAME_SIZE)) {
+            break; /* remaining low pages will be demand-paged on access */
+        }
         paging_allocate_user_page_frame(
             &_paging_kernel_page_directory,
             (void *)address
         );
     }
-    paging_allocate_user_page_frame(
-        &_paging_kernel_page_directory,
-        (void *)0x3FF000
-    );
+    if (paging_allocate_check(PAGE_FRAME_SIZE)) {
+        paging_allocate_user_page_frame(
+            &_paging_kernel_page_directory,
+            (void *)0x3FF000
+        );
+    }
 
 #if DISK_DRIVER_SELF_TEST
     framebuffer_write_text(1, 0, "Disk LBA 17 test: ", 0x0F);

@@ -186,25 +186,45 @@ bool swap_out(struct PageDirectory *page_dir, void *virtual_addr) {
         return false;
     }
 
+    // Switch to the target address space so recursive page-table reads
+    // and the page-content copy reference the correct CR3.
+    struct PageDirectory *saved_page_dir = paging_get_current_page_directory_addr();
+    bool need_cr3_switch = (saved_page_dir != page_dir);
+    if (need_cr3_switch) {
+        paging_use_page_directory(page_dir);
+    }
+
     struct PageTable *page_table = paging_get_page_table(page_dir, page_directory_index);
     if (page_table == NULL) {
+        if (need_cr3_switch) {
+            paging_use_page_directory(saved_page_dir);
+        }
         return false;
     }
 
     struct PageTableEntry *pte = &page_table->table[page_table_index];
     if (!pte->flag.present_bit || !pte->flag.user_supervisor) {
+        if (need_cr3_switch) {
+            paging_use_page_directory(saved_page_dir);
+        }
         return false;
     }
 
     uint32_t physical_frame_index = pte->lower_address;
     if (physical_frame_index < KERNEL_RESERVED_PAGE_FRAME_COUNT ||
         physical_frame_index >= PAGE_FRAME_MAX_COUNT) {
+        if (need_cr3_switch) {
+            paging_use_page_directory(saved_page_dir);
+        }
         return false;
     }
 
     // 1. Allocate a free swap slot in Swap Space
     int32_t slot_index = swap_allocate_slot(page_dir, virtual_page_number);
     if (slot_index < 0) {
+        if (need_cr3_switch) {
+            paging_use_page_directory(saved_page_dir);
+        }
         return false;
     }
 
@@ -227,6 +247,11 @@ bool swap_out(struct PageDirectory *page_dir, void *virtual_addr) {
     page_manager_state.free_page_frame_count++;
     swap_remove_resident_entry(page_dir, virtual_page_number);
     swap_manager_state.swap_out_count++;
+
+    // Restore original address space
+    if (need_cr3_switch) {
+        paging_use_page_directory(saved_page_dir);
+    }
 
     return true;
 }
