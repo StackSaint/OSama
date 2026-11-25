@@ -25,15 +25,15 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple inserter insert-shell insert-clock insert-echo insert-hello insert-badapple
+.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple user-guess inserter insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 
-run: all insert-shell insert-clock insert-echo insert-hello insert-badapple
+run: all insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 	@$(QEMU) \
 		-rtc base=utc \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 
-run-audio: all insert-shell insert-clock insert-echo insert-hello insert-badapple
+run-audio: all insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 	@$(QEMU) \
 		-rtc base=utc \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
@@ -186,3 +186,15 @@ insert-badapple: inserter user-badapple $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 	else \
 		echo "other/badapple.dat not found, skipping video data"; \
 	fi
+
+user-guess:
+	@mkdir -p $(OUTPUT_FOLDER)
+	@$(ASM) $(AFLAGS) user/crt0.s -o $(OUTPUT_FOLDER)/user-crt0.o
+	@$(CC) $(CFLAGS) -fno-pie user/guess.c -o $(OUTPUT_FOLDER)/user-guess.o
+	@$(LIN) -T user/user-linker-exec.ld -melf_i386 --oformat=binary \
+		$(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-guess.o \
+		-o $(OUTPUT_FOLDER)/guess
+	@rm -f $(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-guess.o
+
+insert-guess: inserter user-guess $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER) && ./inserter guess 1 $(DISK_NAME).bin
