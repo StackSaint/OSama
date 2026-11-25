@@ -14,15 +14,17 @@
 #define EXT_SCANCODE_END       0x4F
 #define EXT_SCANCODE_DELETE    0x53
 
-#define KEY_UP                 0x11
-#define KEY_DOWN               0x12
-#define KEY_LEFT               0x13
-#define KEY_RIGHT              0x14
-#define KEY_PAGE_UP            0x15
-#define KEY_PAGE_DOWN          0x16
-#define KEY_HOME               0x17
-#define KEY_END                0x18
-#define KEY_DELETE             0x19
+/* Special keys use codes 0x80 and above, so they never collide with the
+ * Ctrl+letter control codes (0x01-0x1A) or printable ASCII. */
+#define KEY_UP                 0x80
+#define KEY_DOWN               0x81
+#define KEY_LEFT               0x82
+#define KEY_RIGHT              0x83
+#define KEY_PAGE_UP            0x84
+#define KEY_PAGE_DOWN          0x85
+#define KEY_HOME               0x86
+#define KEY_END                0x87
+#define KEY_DELETE             0x88
 
 /* ASCII control code delivered to user-space when Ctrl+C is pressed.
  * Falls outside the printable range (0x20..0x7E) and the KEY_* special range,

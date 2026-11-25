@@ -395,7 +395,11 @@ static void command_export(uint32_t argc, char *argv[]) {
             path_save();
         }
     } else if (argc == 3 && text_equal(argv[1], "remove")) {
-        if (path_remove_dir(argv[2])) {
+        if (path_count == 1u && path_contains_dir(argv[2])) {
+            /* path.env cannot hold an empty PATH; it would come back as the
+             * default after a reboot. */
+            print_error("export: PATH must keep at least one directory\n");
+        } else if (path_remove_dir(argv[2])) {
             path_save();
         } else {
             print_error("export: directory not in PATH\n");
@@ -1106,8 +1110,14 @@ static void input_remove(char *buffer, uint32_t *length, uint32_t *cursor, uint3
 
 /* Left click on the input line moves the text cursor to the clicked cell. */
 static void input_handle_click(const char *buffer, uint32_t length, uint32_t *cursor,
-                               uint32_t mouse) {
+                               uint32_t mouse, bool *view_scrolled) {
     call_syscall(SYS_SCROLL, 3u, 0, 0);
+    if (*view_scrolled) {
+        /* The click was aimed at the scrolled-back view; just go back to
+         * the live view instead of moving the cursor to a wrong spot. */
+        *view_scrolled = false;
+        return;
+    }
     output_flush();
     uint32_t text_cursor = sys_get_text_cursor();
     int32_t here = (int32_t)((text_cursor >> 8) & 0xFFu) * 80 + (int32_t)(text_cursor & 0xFFu);
@@ -1125,6 +1135,7 @@ static void read_line(char *buffer) {
     uint32_t length = 0;
     uint32_t cursor = 0;
     bool left_was_down = true;  /* ignore a button already held at the prompt */
+    bool view_scrolled = false;
     buffer[0] = '\0';
     command_history_position = command_history_count;
     (void)sys_mouse_wheel();  /* drop wheel movement made while a program ran */
@@ -1135,16 +1146,16 @@ static void read_line(char *buffer) {
             /* Mouse wheel scrolls the terminal, one SYS_SCROLL per line. */
             int32_t wheel = sys_mouse_wheel();
             for (; wheel > 0; wheel--) {
-                call_syscall(SYS_SCROLL, 1u, 0, 0);
+                view_scrolled = call_syscall(SYS_SCROLL, 1u, 0, 0) != 0;
             }
             for (; wheel < 0; wheel++) {
-                call_syscall(SYS_SCROLL, 2u, 0, 0);
+                view_scrolled = call_syscall(SYS_SCROLL, 2u, 0, 0) != 0;
             }
 
             uint32_t mouse = sys_mouse_get();
             bool left_down = ((mouse >> 16) & 0x01u) != 0u;  /* left button */
             if (left_down && !left_was_down) {
-                input_handle_click(buffer, length, &cursor, mouse);
+                input_handle_click(buffer, length, &cursor, mouse, &view_scrolled);
             }
             left_was_down = left_down;
             continue;
@@ -1168,6 +1179,7 @@ static void read_line(char *buffer) {
             if (up ? command_history_position > 0u
                    : command_history_position < command_history_count) {
                 call_syscall(SYS_SCROLL, 3u, 0, 0);
+                view_scrolled = false;
                 input_move_cursor(buffer, cursor, length);
                 if (up) {
                     command_history_position--;
@@ -1185,14 +1197,15 @@ static void read_line(char *buffer) {
             continue;
         }
         if (character == (char)KEY_PAGE_UP) {
-            call_syscall(SYS_SCROLL, 1u, 0, 0);
+            view_scrolled = call_syscall(SYS_SCROLL, 1u, 0, 0) != 0;
             continue;
         }
         if (character == (char)KEY_PAGE_DOWN) {
-            call_syscall(SYS_SCROLL, 2u, 0, 0);
+            view_scrolled = call_syscall(SYS_SCROLL, 2u, 0, 0) != 0;
             continue;
         }
         call_syscall(SYS_SCROLL, 3u, 0, 0);
+        view_scrolled = false;
         if (character == (char)KEY_LEFT) {
             if (cursor > 0u) {
                 input_move_cursor(buffer, cursor, cursor - 1u);

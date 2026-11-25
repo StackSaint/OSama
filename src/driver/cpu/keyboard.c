@@ -115,31 +115,31 @@ void keyboard_isr(void) {
 
         switch (scancode) {
             case EXT_SCANCODE_UP:
-                keyboard_state.keyboard_buffer = KEY_UP;
+                keyboard_state.keyboard_buffer = (char)KEY_UP;
                 break;
             case EXT_SCANCODE_DOWN:
-                keyboard_state.keyboard_buffer = KEY_DOWN;
+                keyboard_state.keyboard_buffer = (char)KEY_DOWN;
                 break;
             case EXT_SCANCODE_LEFT:
-                keyboard_state.keyboard_buffer = KEY_LEFT;
+                keyboard_state.keyboard_buffer = (char)KEY_LEFT;
                 break;
             case EXT_SCANCODE_RIGHT:
-                keyboard_state.keyboard_buffer = KEY_RIGHT;
+                keyboard_state.keyboard_buffer = (char)KEY_RIGHT;
                 break;
             case EXT_SCANCODE_HOME:
-                keyboard_state.keyboard_buffer = KEY_HOME;
+                keyboard_state.keyboard_buffer = (char)KEY_HOME;
                 break;
             case EXT_SCANCODE_END:
-                keyboard_state.keyboard_buffer = KEY_END;
+                keyboard_state.keyboard_buffer = (char)KEY_END;
                 break;
             case EXT_SCANCODE_DELETE:
-                keyboard_state.keyboard_buffer = KEY_DELETE;
+                keyboard_state.keyboard_buffer = (char)KEY_DELETE;
                 break;
             case 0x49:
-                keyboard_state.keyboard_buffer = KEY_PAGE_UP;
+                keyboard_state.keyboard_buffer = (char)KEY_PAGE_UP;
                 break;
             case 0x51:
-                keyboard_state.keyboard_buffer = KEY_PAGE_DOWN;
+                keyboard_state.keyboard_buffer = (char)KEY_PAGE_DOWN;
                 break;
             case 0x1C:  /* Numpad Enter */
                 keyboard_state.keyboard_buffer = '\n';

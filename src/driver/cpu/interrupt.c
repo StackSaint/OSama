@@ -232,6 +232,14 @@ static void rtc_apply_wib(struct RTCTime *t) {
     }
 }
 
+/* True when [address, address + size) lies completely in user space, so a
+ * syscall cannot be tricked into reading or writing kernel memory. */
+static bool user_range_ok(uint32_t address, uint32_t size) {
+    return address != 0u &&
+           address < KERNEL_VIRTUAL_ADDRESS_BASE &&
+           size <= KERNEL_VIRTUAL_ADDRESS_BASE - address;
+}
+
 void handle_syscall(struct InterruptFrame *frame) {
     switch (frame->cpu.general.eax) {
         case SYS_READ: {
@@ -352,7 +360,7 @@ void handle_syscall(struct InterruptFrame *frame) {
             break;
         case SYS_SYSINFO: {
             struct SystemInfo *info = (struct SystemInfo *)frame->cpu.general.ebx;
-            if (info == NULL) {
+            if (!user_range_ok((uint32_t)info, sizeof(*info))) {
                 frame->cpu.general.eax = (uint32_t)-1;
                 break;
             }
@@ -370,6 +378,11 @@ void handle_syscall(struct InterruptFrame *frame) {
             break;
         }
         case SYS_FB_BLIT:
+            if (!user_range_ok(frame->cpu.general.ebx,
+                               (frame->cpu.general.edx & 0xFFFFu) * 2u)) {
+                frame->cpu.general.eax = (uint32_t)-1;
+                break;
+            }
             framebuffer_blit(
                 (uint16_t)frame->cpu.general.ecx,
                 (const uint16_t *)frame->cpu.general.ebx,
@@ -382,9 +395,16 @@ void handle_syscall(struct InterruptFrame *frame) {
                 (struct EXT2DriverRequest *)frame->cpu.general.ebx;
             uint32_t *bytes_read = (uint32_t *)frame->cpu.general.edx;
             uint32_t copied = 0;
-            frame->cpu.general.eax = request != NULL
-                ? (uint32_t)(int32_t)read_at(*request, frame->cpu.general.ecx, &copied)
-                : (uint32_t)-1;
+            if (!user_range_ok((uint32_t)request, sizeof(*request)) ||
+                !user_range_ok((uint32_t)request->buf, request->buffer_size) ||
+                !user_range_ok((uint32_t)request->name, request->name_len) ||
+                (bytes_read != NULL &&
+                 !user_range_ok((uint32_t)bytes_read, sizeof(*bytes_read)))) {
+                frame->cpu.general.eax = (uint32_t)-1;
+                break;
+            }
+            frame->cpu.general.eax =
+                (uint32_t)(int32_t)read_at(*request, frame->cpu.general.ecx, &copied);
             if (bytes_read != NULL) {
                 *bytes_read = copied;
             }
@@ -457,7 +477,8 @@ void handle_syscall(struct InterruptFrame *frame) {
                 scroll_offset = 0;
             }
             render_scroll_view();
-            frame->cpu.general.eax = 0;
+            /* Lines scrolled back from the live view (0 = not scrolled). */
+            frame->cpu.general.eax = scroll_offset;
             break;
         }
         case SYS_EXEC: {
@@ -478,6 +499,9 @@ void handle_syscall(struct InterruptFrame *frame) {
              * SYS_KILL does. */
             if (current_pid > 0 &&
                 process_destroy((uint32_t)current_pid)) {
+                /* The switch never returns here, so redraw the pointer
+                 * that main_interrupt_handler hid for this syscall. */
+                mouse_cursor_show();
                 scheduler_switch_to_next_process();
             }
             frame->cpu.general.eax = (uint32_t)-1;
@@ -503,6 +527,7 @@ void handle_syscall(struct InterruptFrame *frame) {
                 process_destroy((uint32_t)target_pid)) {
                 frame->cpu.general.eax = 0;
                 if (target_pid == current_pid) {
+                    mouse_cursor_show();
                     scheduler_switch_to_next_process();
                 }
             } else {
