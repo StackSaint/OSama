@@ -25,10 +25,16 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run all build disk clean kernel iso user-shell user-clock user-echo inserter insert-shell insert-clock insert-echo
+.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo inserter insert-shell insert-clock insert-echo
 
 run: all insert-shell insert-clock insert-echo
 	@$(QEMU) \
+		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
+		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
+
+run-audio: all insert-shell insert-clock insert-echo
+	@$(QEMU) \
+		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 

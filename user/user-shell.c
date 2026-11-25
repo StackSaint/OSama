@@ -12,6 +12,8 @@
 #define MAX_FIND_DEPTH 8u
 #define MAX_HISTORY_SIZE 16u
 
+#define OUTPUT_BUFFER_SIZE 512u
+
 #define COLOR_BLACK         0x00
 #define COLOR_BLUE          0x01
 #define COLOR_GREEN         0x02
@@ -30,6 +32,11 @@
 #define COLOR_WHITE         0x0F
 
 static uint32_t current_directory = 1u;
+static char current_path[MAX_PATH_SIZE] = "/";
+/* PATH is stored in a heap-allocated, growable buffer (dynamic array) instead
+ * of a fixed-size static array, so it can grow without a static limit. */
+static char *path_env = NULL;
+static uint32_t path_env_len = 0;
 static uint8_t directory_buffer[MAX_DIRECTORY_SIZE];
 static uint8_t file_buffer[MAX_FILE_SIZE];
 static char process_buffer[512];
@@ -37,8 +44,306 @@ static char command_history[MAX_HISTORY_SIZE][MAX_INPUT_SIZE];
 static uint32_t command_history_count = 0;
 static uint32_t command_history_position = 0;
 
-static void parse_and_execute(char *line);
-static int shell_read_directory(uint32_t inode, uint8_t *buffer);
+static char pipe_buffer[512];
+static uint32_t pipe_pos = 0;
+static bool pipe_mode = false;
+
+static char output_buffer[OUTPUT_BUFFER_SIZE];
+static uint8_t output_colors[OUTPUT_BUFFER_SIZE];
+static uint32_t output_pos = 0;
+
+static int32_t call_syscall(uint32_t number,
+                            uint32_t arg1,
+                            uint32_t arg2,
+                            uint32_t arg3);
+
+static void output_flush(void) {
+    for (uint32_t i = 0; i < output_pos; i++) {
+        call_syscall(SYS_PUTCHAR, (uint32_t)(uint8_t)output_buffer[i],
+                     (uint32_t)output_colors[i], 0);
+    }
+    output_pos = 0;
+}
+
+static uint32_t text_length(const char *text);
+static bool text_equal(const char *left, const char *right);
+static bool copy_text(char *destination, const char *source,
+                      uint32_t capacity);
+static void print_text_color(const char *text, uint8_t color);
+static void print_char(char character);
+static void print_error(const char *text);
+static bool resolve_file_path(const char *path,
+                              uint32_t *parent_inode,
+                              char *name);
+static bool shell_get_file_size(uint32_t parent_inode,
+                                const char *name,
+                                uint32_t *size);
+static bool read_file(const char *path,
+                      uint32_t *parent_inode,
+                      char *name,
+                      uint32_t *size);
+static bool write_file(uint32_t parent_inode,
+                       const char *name,
+                       const uint8_t *contents,
+                       uint32_t size);
+static bool path_contains_dir(const char *dir);
+static int32_t search_path(const char *cmd, char *out_path,
+                           uint32_t out_size);
+static void command_export(uint32_t argc, char *argv[]);
+static void path_save(void);
+static void path_load(void);
+
+/* Replace the heap-backed PATH buffer with a copy of `value`. Frees the old
+ * buffer and updates path_env_len. Returns false if allocation fails (old
+ * buffer is left untouched in that case). */
+static bool path_env_set(const char *value) {
+    uint32_t len = text_length(value);
+    char *fresh = (char *)sys_malloc(len + 1u);
+    if (fresh == NULL) {
+        return false;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        fresh[i] = value[i];
+    }
+    fresh[len] = '\0';
+    if (path_env != NULL) {
+        sys_free(path_env);
+    }
+    path_env = fresh;
+    path_env_len = len;
+    return true;
+}
+
+/* Ensure PATH has a default value before path_load() runs. */
+static void path_env_init(void) {
+    if (path_env == NULL) {
+        (void)path_env_set("/bin");
+    }
+}
+
+static void update_current_path(const char *path) {
+    char resolved[MAX_PATH_SIZE];
+    uint32_t res_len = 0;
+
+    if (path[0] == '/') {
+        resolved[res_len++] = '/';
+        path++;
+    } else {
+        uint32_t cur_len = text_length(current_path);
+        for (uint32_t i = 0; i < cur_len && res_len + 1u < MAX_PATH_SIZE; i++) {
+            resolved[res_len++] = current_path[i];
+        }
+    }
+
+    const char *p = path;
+    while (*p != '\0') {
+        while (*p == '/') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        char comp[MAX_PATH_SIZE];
+        uint32_t clen = 0;
+        while (*p != '\0' && *p != '/' && clen + 1u < MAX_PATH_SIZE) {
+            comp[clen++] = *p++;
+        }
+        comp[clen] = '\0';
+
+        if (text_equal(comp, ".")) {
+            continue;
+        } else if (text_equal(comp, "..")) {
+            while (res_len > 1 && resolved[res_len - 1] != '/') {
+                res_len--;
+            }
+            if (res_len > 1) {
+                res_len--;
+            }
+            resolved[res_len] = '\0';
+        } else {
+            if (res_len > 0 && resolved[res_len - 1] != '/') {
+                if (res_len + 1u < MAX_PATH_SIZE) {
+                    resolved[res_len++] = '/';
+                }
+            }
+            for (uint32_t i = 0; comp[i] != '\0' && res_len + 1u < MAX_PATH_SIZE;
+                 i++) {
+                resolved[res_len++] = comp[i];
+            }
+        }
+    }
+
+    if (res_len == 0) {
+        resolved[0] = '/';
+        res_len = 1;
+    }
+    resolved[res_len] = '\0';
+
+    copy_text(current_path, resolved, MAX_PATH_SIZE);
+}
+
+static bool path_contains_dir(const char *dir) {
+    uint32_t dir_len = text_length(dir);
+    if (dir_len == 0) {
+        return false;
+    }
+    const char *p = path_env;
+    while (*p != '\0') {
+        uint32_t start = 0;
+        char comp[MAX_PATH_SIZE];
+        while (*p != '\0' && *p != ':' && start + 1u < MAX_PATH_SIZE) {
+            comp[start++] = *p++;
+        }
+        comp[start] = '\0';
+        if (*p == ':') {
+            p++;
+        }
+        if (text_equal(comp, dir)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int32_t search_path(const char *cmd, char *out_path,
+                           uint32_t out_size) {
+    const char *p = path_env;
+    while (*p != '\0') {
+        uint32_t dir_len = 0;
+        char dir[MAX_PATH_SIZE];
+        while (*p != '\0' && *p != ':' && dir_len + 1u < MAX_PATH_SIZE) {
+            dir[dir_len++] = *p++;
+        }
+        dir[dir_len] = '\0';
+        if (*p == ':') {
+            p++;
+        }
+
+        uint32_t total = 0;
+        for (uint32_t i = 0; i < dir_len && total + 1u < out_size; i++) {
+            out_path[total++] = dir[i];
+        }
+        if (total + 1u < out_size && dir[dir_len - 1] != '/') {
+            out_path[total++] = '/';
+        }
+        uint32_t cmd_len = text_length(cmd);
+        for (uint32_t i = 0; i < cmd_len && total + 1u < out_size; i++) {
+            out_path[total++] = cmd[i];
+        }
+        out_path[total] = '\0';
+
+        uint32_t parent_inode;
+        char name[MAX_PATH_SIZE];
+        uint32_t size;
+        if (resolve_file_path(out_path, &parent_inode, name) &&
+            shell_get_file_size(parent_inode, name, &size) && size != 0) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void command_export(uint32_t argc, char *argv[]) {
+    if (argc == 1) {
+        print_text_color("PATH=", COLOR_WHITE);
+        print_text_color(path_env, COLOR_LIGHT_GRAY);
+        print_char('\n');
+        return;
+    }
+    if (argc == 3 && text_equal(argv[1], "add")) {
+        if (path_contains_dir(argv[2])) {
+            print_error("export: directory already in PATH\n");
+            return;
+        }
+        uint32_t len = text_length(path_env);
+        uint32_t dir_len = text_length(argv[2]);
+        char *new_path = (char *)sys_malloc(len + dir_len + 2u);
+        if (new_path == NULL) {
+            print_error("export: allocation failed\n");
+            return;
+        }
+        uint32_t nlen = 0;
+        for (uint32_t i = 0; i < len; i++) {
+            new_path[nlen++] = path_env[i];
+        }
+        if (nlen > 0 && new_path[nlen - 1] != ':') {
+            new_path[nlen++] = ':';
+        }
+        for (uint32_t i = 0; i < dir_len; i++) {
+            new_path[nlen++] = argv[2][i];
+        }
+        new_path[nlen] = '\0';
+        bool ok = path_env_set(new_path);
+        sys_free(new_path);
+        if (ok) {
+            path_save();
+        } else {
+            print_error("export: allocation failed\n");
+        }
+    } else if (argc == 3 && text_equal(argv[1], "remove")) {
+        char new_path[MAX_PATH_SIZE];
+        uint32_t nlen = 0;
+        const char *p = path_env;
+        bool found = false;
+        while (*p != '\0') {
+            uint32_t start = 0;
+            char comp[MAX_PATH_SIZE];
+            while (*p != '\0' && *p != ':' && start + 1u < MAX_PATH_SIZE) {
+                comp[start++] = *p++;
+            }
+            comp[start] = '\0';
+            if (*p == ':') {
+                p++;
+            }
+            if (text_equal(comp, argv[2])) {
+                found = true;
+                continue;
+            }
+            if (nlen > 0) {
+                new_path[nlen++] = ':';
+            }
+            for (uint32_t i = 0; comp[i] != '\0' && nlen + 1u < MAX_PATH_SIZE;
+                 i++) {
+                new_path[nlen++] = comp[i];
+            }
+        }
+        new_path[nlen] = '\0';
+        if (found) {
+            (void)path_env_set(new_path);
+            path_save();
+        } else {
+            print_error("export: directory not in PATH\n");
+        }
+    } else {
+        print_error("export: usage: export [add|remove] <dir>\n");
+    }
+}
+
+static void path_save(void) {
+    uint32_t parent_inode;
+    char name[MAX_PATH_SIZE];
+    if (!resolve_file_path("/path.env", &parent_inode, name)) {
+        return;
+    }
+    uint32_t len = path_env_len;
+    if (len == 0 || len > MAX_FILE_SIZE) {
+        return;
+    }
+    write_file(parent_inode, name, (const uint8_t *)path_env, len);
+}
+
+static void path_load(void) {
+    uint32_t parent_inode;
+    char name[MAX_PATH_SIZE];
+    uint32_t size;
+    if (!read_file("/path.env", &parent_inode, name, &size) || size == 0 ||
+        size > MAX_FILE_SIZE) {
+        return;
+    }
+    file_buffer[size] = '\0';
+    (void)path_env_set((char *)file_buffer);
+}
 
 static uint32_t text_length(const char *text) {
     uint32_t length = 0;
@@ -54,23 +359,6 @@ static bool text_equal(const char *left, const char *right) {
         index++;
     }
     return left[index] == right[index];
-}
-
-static bool text_contains(const char *text, const char *pattern) {
-    if (*pattern == '\0') {
-        return true;
-    }
-    for (uint32_t start = 0; text[start] != '\0'; start++) {
-        uint32_t offset = 0;
-        while (pattern[offset] != '\0' &&
-               text[start + offset] == pattern[offset]) {
-            offset++;
-        }
-        if (pattern[offset] == '\0') {
-            return true;
-        }
-    }
-    return false;
 }
 
 static bool range_contains(const uint8_t *text,
@@ -128,7 +416,18 @@ static int32_t call_syscall(uint32_t number,
 }
 
 static void print_char_color(char character, uint8_t color) {
-    call_syscall(SYS_PUTCHAR, (uint32_t)(uint8_t)character, (uint32_t)color, 0);
+    if (pipe_mode) {
+        if (pipe_pos < sizeof(pipe_buffer) - 1u) {
+            pipe_buffer[pipe_pos++] = character;
+        }
+        return;
+    }
+    if (output_pos >= OUTPUT_BUFFER_SIZE) {
+        output_flush();
+    }
+    output_buffer[output_pos] = character;
+    output_colors[output_pos] = color;
+    output_pos++;
 }
 
 static void print_text_color(const char *text, uint8_t color) {
@@ -146,6 +445,8 @@ static void print_text(const char *text) {
 }
 
 static void print_error(const char *text) {
+    /* Audible feedback for shell errors (PC speaker bonus). */
+    sys_pc_speaker(196u, 140u);
     print_text_color(text, COLOR_RED);
 }
 
@@ -208,6 +509,7 @@ static void print_prompt(void) {
     print_text_color("@", COLOR_GREEN);
     print_text_color("user", COLOR_GREEN);
     print_text_color(":", COLOR_GREEN);
+    print_text_color(current_path, COLOR_LIGHT_GRAY);
     print_text_color("$ ", COLOR_WHITE);
 }
 
@@ -257,156 +559,6 @@ static uint32_t replace_input_line(char *buffer,
     return index;
 }
 
-static const char *const built_in_commands[] = {
-    "help", "clear", "ls", "cd", "mkdir", "rmdir", "rm",
-    "cat", "cp", "mv", "find", "grep", "ps", "kill", "exec",
-    "time", "uptime", "shutdown", "exit"
-};
-
-static bool starts_with(const char *text, const char *prefix) {
-    while (*prefix != '\0') {
-        if (*text++ != *prefix++) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static uint32_t common_prefix_length(const char *left, const char *right) {
-    uint32_t length = 0;
-    while (left[length] != '\0' && left[length] == right[length]) {
-        length++;
-    }
-    return length;
-}
-
-static void print_candidates(char candidates[][MAX_PATH_SIZE],
-                             uint32_t count) {
-    print_text("\n");
-    for (uint32_t i = 0; i < count; i++) {
-        print_text_color(candidates[i], COLOR_LIGHT_GRAY);
-        print_char(' ');
-    }
-    print_char('\n');
-}
-
-static bool replace_autocomplete(char *buffer,
-                                 uint32_t index,
-                                 uint32_t token_start,
-                                 const char *completion) {
-    while (index > token_start) {
-        index--;
-        print_text("\b \b");
-    }
-    copy_text(buffer + token_start, completion,
-              MAX_INPUT_SIZE - token_start);
-    index = text_length(buffer);
-    print_text(buffer + token_start);
-    return true;
-}
-
-static uint32_t autocomplete(char *buffer, uint32_t index) {
-    uint32_t token_start = index;
-    while (token_start > 0u &&
-           buffer[token_start - 1u] != ' ' &&
-           buffer[token_start - 1u] != '\t') {
-        token_start--;
-    }
-
-    char prefix[MAX_PATH_SIZE];
-    uint32_t prefix_length = index - token_start;
-    if (prefix_length >= sizeof(prefix)) {
-        return index;
-    }
-    for (uint32_t i = 0; i < prefix_length; i++) {
-        prefix[i] = buffer[token_start + i];
-    }
-    prefix[prefix_length] = '\0';
-
-    char candidates[32][MAX_PATH_SIZE];
-    uint32_t candidate_count = 0;
-    bool command_position = token_start == 0u;
-
-    if (command_position) {
-        uint32_t count = sizeof(built_in_commands) /
-                         sizeof(built_in_commands[0]);
-        for (uint32_t i = 0; i < count && candidate_count < 32u; i++) {
-            if (starts_with(built_in_commands[i], prefix) &&
-                copy_text(candidates[candidate_count],
-                          built_in_commands[i],
-                          MAX_PATH_SIZE)) {
-                candidate_count++;
-            }
-        }
-    } else {
-        if (shell_read_directory(current_directory, directory_buffer) != 0) {
-            return index;
-        }
-        uint32_t offset = 0;
-        while (offset + sizeof(struct EXT2DirectoryEntry) <=
-               MAX_DIRECTORY_SIZE &&
-               candidate_count < 32u) {
-            const struct EXT2DirectoryEntry *entry =
-                (const struct EXT2DirectoryEntry *)(directory_buffer + offset);
-            if (entry->rec_len == 0) {
-                break;
-            }
-            if (entry->rec_len < sizeof(*entry) ||
-                entry->rec_len > MAX_DIRECTORY_SIZE - offset ||
-                entry->name_len > entry->rec_len - sizeof(*entry)) {
-                break;
-            }
-            if (entry->inode != 0 && entry->name_len < MAX_PATH_SIZE) {
-                char name[MAX_PATH_SIZE];
-                const char *entry_name =
-                    (const char *)entry + sizeof(*entry);
-                for (uint32_t i = 0; i < entry->name_len; i++) {
-                    name[i] = entry_name[i];
-                }
-                name[entry->name_len] = '\0';
-                if (!text_equal(name, ".") && !text_equal(name, "..") &&
-                    starts_with(name, prefix) &&
-                    copy_text(candidates[candidate_count], name,
-                              MAX_PATH_SIZE)) {
-                    candidate_count++;
-                }
-            }
-            offset += entry->rec_len;
-        }
-    }
-
-    if (candidate_count == 0u) {
-        return index;
-    }
-    if (candidate_count > 1u) {
-        uint32_t common = text_length(candidates[0]);
-        for (uint32_t i = 1u; i < candidate_count; i++) {
-            uint32_t next = common_prefix_length(candidates[0],
-                                                 candidates[i]);
-            if (next < common) {
-                common = next;
-            }
-        }
-        if (common > prefix_length) {
-            char completion[MAX_PATH_SIZE];
-            for (uint32_t i = 0; i < common; i++) {
-                completion[i] = candidates[0][i];
-            }
-            completion[common] = '\0';
-            index = replace_autocomplete(buffer, index, token_start,
-                                         completion);
-        } else {
-            print_candidates(candidates, candidate_count);
-            print_prompt();
-            print_text(buffer);
-        }
-        return index;
-    }
-
-    return replace_autocomplete(buffer, index, token_start,
-                                candidates[0]) ? text_length(buffer) : index;
-}
-
 static void read_line(char *buffer) {
     uint32_t index = 0;
     command_history_position = command_history_count;
@@ -416,19 +568,32 @@ static void read_line(char *buffer) {
         if (character == '\0') {
             continue;
         }
+        if (character == (char)KEY_CTRL_C) {
+            while (index > 0u) {
+                index--;
+                print_text("\b \b");
+            }
+            print_text("^C\n");
+            output_flush();
+            buffer[index] = '\0';
+            return;
+        }
         if (character == (char)KEY_UP) {
             if (command_history_position > 0u) {
-                command_history_position--;
-                index = replace_input_line(
-                    buffer,
-                    index,
-                    command_history[command_history_position]
-                );
+            call_syscall(SYS_SCROLL, 3u, 0, 0);
+            command_history_position--;
+            index = replace_input_line(
+                buffer,
+                index,
+                command_history[command_history_position]
+            );
+            output_flush();
             }
             continue;
         }
         if (character == (char)KEY_DOWN) {
             if (command_history_position < command_history_count) {
+                call_syscall(SYS_SCROLL, 3u, 0, 0);
                 command_history_position++;
                 if (command_history_position < command_history_count) {
                     index = replace_input_line(
@@ -439,30 +604,41 @@ static void read_line(char *buffer) {
                 } else {
                     index = replace_input_line(buffer, index, "");
                 }
+                output_flush();
             }
             continue;
         }
+        if (character == (char)KEY_PAGE_UP) {
+            call_syscall(SYS_SCROLL, 1u, 0, 0);
+            continue;
+        }
+        if (character == (char)KEY_PAGE_DOWN) {
+            call_syscall(SYS_SCROLL, 2u, 0, 0);
+            continue;
+        }
         if (character == '\n' || character == '\r') {
+            call_syscall(SYS_SCROLL, 3u, 0, 0);
             print_text("\n");
+            output_flush();
             buffer[index] = '\0';
             return;
         }
-        if (character == '\t') {
-            index = autocomplete(buffer, index);
-            continue;
-        }
         if (character == '\b') {
             if (index > 0) {
+                call_syscall(SYS_SCROLL, 3u, 0, 0);
                 index--;
                 print_text("\b \b");
+                output_flush();
             }
             continue;
         }
         if (character >= ' ' && character <= '~' &&
             index + 1u < MAX_INPUT_SIZE) {
+            call_syscall(SYS_SCROLL, 3u, 0, 0);
             buffer[index] = character;
             index++;
             print_char_color(character, COLOR_WHITE);
+            output_flush();
         }
     }
 }
@@ -843,6 +1019,14 @@ static void command_exec(uint32_t argc, char *argv[]) {
         return;
     }
     const char *path = argv[0];
+    char resolved[MAX_PATH_SIZE];
+    if (path[0] != '/') {
+        if (search_path(path, resolved, sizeof(resolved)) != 0) {
+            print_error("exec: cannot find executable\n");
+            return;
+        }
+        path = resolved;
+    }
     uint32_t parent_inode;
     uint32_t size;
     char name[MAX_PATH_SIZE];
@@ -871,20 +1055,8 @@ static void command_exec(uint32_t argc, char *argv[]) {
         print_error(")\n");
         return;
     }
-    bool is_clock = text_equal(name, "clock");
     uint32_t start_tick = (uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0);
-    while (!is_clock &&
-           (uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0) - start_tick < 50u) {
-    }
-    if (is_clock) {
-        while (true) {
-            process_buffer[0] = '\0';
-            if (call_syscall(SYS_PS, (uint32_t)process_buffer,
-                             sizeof(process_buffer), 0) != 0 ||
-                !text_contains(process_buffer, ": clock ")) {
-                break;
-            }
-        }
+    while ((uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0) - start_tick < 50u) {
     }
 }
 
@@ -915,43 +1087,23 @@ static void command_grep(const char *pattern, const char *path) {
     }
 }
 
-static void command_script(const char *path) {
-    uint32_t parent_inode;
-    uint32_t size;
-    char name[MAX_PATH_SIZE];
-    if (!read_file(path, &parent_inode, name, &size) ||
-        size == 0u) {
-        print_error("sh: cannot read script\n");
-        return;
-    }
+static void command_grep_buffer(const char *pattern) {
+    uint32_t size = pipe_pos;
+    uint32_t line_start = 0;
+    while (line_start < size) {
+        uint32_t line_end = line_start;
+        while (line_end < size && pipe_buffer[line_end] != '\n') {
+            line_end++;
+        }
 
-    char line[MAX_INPUT_SIZE];
-    uint32_t position = 0;
-    while (position < size) {
-        uint32_t length = 0;
-        while (position < size &&
-               file_buffer[position] != '\n' &&
-               file_buffer[position] != '\r') {
-            if (length + 1u < sizeof(line)) {
-                line[length++] = (char)file_buffer[position];
+        uint32_t length = line_end - line_start;
+        if (range_contains((const uint8_t *)(pipe_buffer + line_start), length, pattern)) {
+            for (uint32_t i = 0; i < length; i++) {
+                print_file_char(pipe_buffer[line_start + i]);
             }
-            position++;
+            print_char('\n');
         }
-        while (position < size &&
-               (file_buffer[position] == '\n' ||
-                file_buffer[position] == '\r')) {
-            position++;
-        }
-        line[length] = '\0';
-
-        uint32_t start = 0;
-        while (line[start] == ' ' || line[start] == '\t') {
-            start++;
-        }
-        if (line[start] == '\0' || line[start] == '#') {
-            continue;
-        }
-        parse_and_execute(line + start);
+        line_start = line_end + (line_end < size ? 1u : 0u);
     }
 }
 
@@ -995,72 +1147,53 @@ static void print_help(void) {
     print_text_color("power off system (ACPI 0x604)\n", COLOR_DARK_GRAY);
     print_text_color("  exit                    ", COLOR_WHITE);
     print_text_color("exit this process\n", COLOR_DARK_GRAY);
+    print_text_color("  export [add|remove] dir ", COLOR_WHITE);
+    print_text_color("manage PATH directories\n", COLOR_DARK_GRAY);
 }
 
-static void parse_and_execute(char *line) {
-    char *arguments[8];
-    uint32_t argument_count = 0;
-    uint32_t index = 0;
-
-    while (line[index] != '\0') {
-        while (line[index] == ' ' || line[index] == '\t') {
-            line[index++] = '\0';
-        }
-        if (line[index] == '\0') {
-            break;
-        }
-        if (argument_count == sizeof(arguments) / sizeof(arguments[0])) {
-            print_error("Too many arguments\n");
-            return;
-        }
-        arguments[argument_count++] = &line[index];
-        while (line[index] != '\0' && line[index] != ' ' && line[index] != '\t') {
-            index++;
-        }
-    }
-    if (argument_count == 0) {
-        return;
-    }
-
-    const char *command = arguments[0];
+static void execute_command(char *argv[], uint32_t argc) {
+    const char *command = argv[0];
     if (text_equal(command, "help")) {
         print_help();
     } else if (text_equal(command, "clear")) {
         call_syscall(SYS_CLEAR_SCREEN, 0, 0, 0);
     } else if (text_equal(command, "ls")) {
         uint32_t inode = current_directory;
-        if (argument_count > 1 &&
-            !resolve_directory_path(arguments[1], &inode)) {
+        if (argc > 1 &&
+            !resolve_directory_path(argv[1], &inode)) {
             print_error("ls: directory not found\n");
         } else {
             list_directory(inode);
         }
     } else if (text_equal(command, "cd")) {
-        if (argument_count == 1) {
+        if (argc == 1) {
             current_directory = 1u;
-        } else if (!resolve_directory_path(arguments[1], &current_directory)) {
+            copy_text(current_path, "/", MAX_PATH_SIZE);
+        } else if (!resolve_directory_path(argv[1], &current_directory)) {
             print_error("cd: directory not found\n");
+        } else {
+            update_current_path(argv[1]);
         }
-    } else if (text_equal(command, "mkdir") && argument_count == 2) {
-        command_mkdir(arguments[1]);
-    } else if (text_equal(command, "rmdir") && argument_count == 2) {
-        command_remove(arguments[1], true);
-    } else if (text_equal(command, "rm") && argument_count == 2) {
-        command_remove(arguments[1], false);
-    } else if (text_equal(command, "cat") && argument_count == 2) {
-        command_cat(arguments[1]);
-    } else if (text_equal(command, "cp") && argument_count == 3) {
-        command_copy(arguments[1], arguments[2]);
-    } else if (text_equal(command, "mv") && argument_count == 3) {
-        command_move(arguments[1], arguments[2]);
-    } else if (text_equal(command, "find") && argument_count <= 3) {
+    } else if (text_equal(command, "mkdir") && argc == 2) {
+        command_mkdir(argv[1]);
+    } else if (text_equal(command, "rmdir") && argc == 2) {
+        command_remove(argv[1], true);
+    } else if (text_equal(command, "rm") && argc == 2) {
+        command_remove(argv[1], false);
+    } else if (text_equal(command, "cat") && argc == 2) {
+        command_cat(argv[1]);
+    } else if (text_equal(command, "cp") && argc == 3) {
+        command_copy(argv[1], argv[2]);
+    } else if (text_equal(command, "mv") && argc == 3) {
+        command_move(argv[1], argv[2]);
+    } else if (text_equal(command, "find") && argc <= 3) {
         const char *pattern = NULL;
-        if (argument_count == 2) {
-            pattern = text_equal(arguments[1], ".") || text_equal(arguments[1], "/")
+        if (argc == 2) {
+            pattern = text_equal(argv[1], ".") || text_equal(argv[1], "/")
                 ? ""
-                : arguments[1];
-        } else if (argument_count == 3) {
-            pattern = arguments[2];
+                : argv[1];
+        } else if (argc == 3) {
+            pattern = argv[2];
         } else {
             pattern = "";
         }
@@ -1076,55 +1209,133 @@ static void parse_and_execute(char *line) {
         } else {
             print_error("find: no matching files in index\n");
         }
-    } else if (text_equal(command, "grep") && argument_count == 3) {
-        command_grep(arguments[1], arguments[2]);
-    } else if (text_equal(command, "ps") && argument_count == 1) {
+    } else if (text_equal(command, "grep") && argc >= 2) {
+        if (argc == 2) {
+            command_grep_buffer(argv[1]);
+        } else {
+            command_grep(argv[1], argv[2]);
+        }
+    } else if (text_equal(command, "ps") && argc == 1) {
         process_buffer[0] = '\0';
         if (call_syscall(SYS_PS, (uint32_t)process_buffer,
                          sizeof(process_buffer), 0) == 0) {
             print_text_color(process_buffer, COLOR_LIGHT_GRAY);
         }
-    } else if (text_equal(command, "kill") && argument_count == 2) {
+    } else if (text_equal(command, "kill") && argc == 2) {
         uint32_t pid;
-        if (!parse_number(arguments[1], &pid) ||
+        if (!parse_number(argv[1], &pid) ||
             call_syscall(SYS_KILL, pid, 0, 0) != 0) {
             print_error("kill: invalid or inactive PID\n");
         }
-    } else if (argument_count >= 1 &&
-               text_length(command) >= 3u &&
-               text_equal(command + text_length(command) - 3u, ".sh")) {
-        if (argument_count == 1) {
-            command_script(command);
-        } else {
-            print_error("sh: script does not accept arguments\n");
-        }
-    } else if (text_equal(command, "exec") && argument_count >= 2) {
-        command_exec(argument_count - 1u, &arguments[1]);
-    } else if (text_equal(command, "time") && argument_count == 1) {
+    } else if (text_equal(command, "exec") && argc >= 2) {
+        command_exec(argc - 1u, &argv[1]);
+    } else if (text_equal(command, "time") && argc == 1) {
         command_time();
-    } else if (text_equal(command, "uptime") && argument_count == 1) {
+    } else if (text_equal(command, "uptime") && argc == 1) {
         print_text_color("Uptime: ", COLOR_DARK_GRAY);
         print_number_color((uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0), COLOR_LIGHT_GRAY);
         print_text_color(" ms\n", COLOR_DARK_GRAY);
-    } else if (text_equal(command, "shutdown") && argument_count == 1) {
+    } else if (text_equal(command, "shutdown") && argc == 1) {
         print_text_color("Shutting down OSama...\n", COLOR_ORANGE);
         call_syscall(SYS_SHUTDOWN, 0, 0, 0);
-    } else if (text_equal(command, "exit") && argument_count == 1) {
+    } else if (text_equal(command, "exit") && argc == 1) {
         call_syscall(SYS_EXIT, 0, 0, 0);
         print_error("exit: could not terminate process\n");
+    } else if (text_equal(command, "export")) {
+        command_export(argc, argv);
     } else {
-        print_error("Unknown command or invalid arguments. Type 'help'.\n");
+        char resolved[MAX_PATH_SIZE];
+        if (search_path(command, resolved, sizeof(resolved)) == 0) {
+            char *new_argv[8];
+            new_argv[0] = resolved;
+            for (uint32_t i = 1; i < argc && i < 8; i++) {
+                new_argv[i] = argv[i];
+            }
+            command_exec(argc, new_argv);
+        } else {
+            print_error("Unknown command or invalid arguments. Type 'help'.\n");
+        }
+    }
+}
+
+static void parse_and_execute(char *line) {
+    char *segments[8];
+    uint32_t segment_count = 0;
+
+    segments[segment_count++] = line;
+    char *ptr = line;
+    while (*ptr != '\0') {
+        if (*ptr == '|') {
+            *ptr = '\0';
+            ptr++;
+            while (*ptr == ' ') {
+                ptr++;
+            }
+            if (*ptr != '\0' &&
+                segment_count < sizeof(segments) / sizeof(segments[0])) {
+                segments[segment_count++] = ptr;
+            }
+        } else {
+            ptr++;
+        }
+    }
+
+    for (uint32_t i = 0; i < segment_count; i++) {
+        char *segment = segments[i];
+        while (*segment == ' ' || *segment == '\t') {
+            segment++;
+        }
+
+        char *args[8];
+        uint32_t argc = 0;
+        char *p = segment;
+        while (*p != '\0') {
+            while (*p == ' ' || *p == '\t') {
+                *p++ = '\0';
+            }
+            if (*p == '\0') {
+                break;
+            }
+            if (argc == sizeof(args) / sizeof(args[0])) {
+                print_error("Too many arguments\n");
+                return;
+            }
+            args[argc++] = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t') {
+                p++;
+            }
+        }
+        if (argc == 0) {
+            continue;
+        }
+
+        bool is_last = (i == segment_count - 1);
+        if (!is_last) {
+            pipe_mode = true;
+            pipe_pos = 0;
+        }
+
+        execute_command(args, argc);
+
+        if (!is_last) {
+            pipe_mode = false;
+        }
     }
 }
 
 int main(void) {
+    path_env_init();
+    path_load();
     print_text_color("Welcome to OSama\n", COLOR_BLUE);
+    output_flush();
     char input_buffer[MAX_INPUT_SIZE];
     while (true) {
         print_prompt();
+        output_flush();
         read_line(input_buffer);
         history_add(input_buffer);
         parse_and_execute(input_buffer);
+        output_flush();
     }
     return 0;
 }
