@@ -25,14 +25,14 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo inserter insert-shell insert-clock insert-echo
+.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello inserter insert-shell insert-clock insert-echo insert-hello
 
-run: all insert-shell insert-clock insert-echo
+run: all insert-shell insert-clock insert-echo insert-hello
 	@$(QEMU) \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 
-run-audio: all insert-shell insert-clock insert-echo
+run-audio: all insert-shell insert-clock insert-echo insert-hello
 	@$(QEMU) \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
@@ -140,6 +140,15 @@ user-echo:
 		-o $(OUTPUT_FOLDER)/echo
 	@rm -f $(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-echo.o
 
+user-hello:
+	@mkdir -p $(OUTPUT_FOLDER)
+	@$(ASM) $(AFLAGS) user/crt0.s -o $(OUTPUT_FOLDER)/user-crt0.o
+	@$(CC) $(CFLAGS) -fno-pie user/hello.c -o $(OUTPUT_FOLDER)/user-hello.o
+	@$(LIN) -T user/user-linker-exec.ld -melf_i386 --oformat=binary \
+		$(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-hello.o \
+		-o $(OUTPUT_FOLDER)/hello
+	@rm -f $(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-hello.o
+
 inserter:
 	@$(CC) -std=c11 -Wall -Wextra -Werror -I$(SOURCE_FOLDER) \
 		tools/external-inserter.c $(SOURCE_FOLDER)/filesystem/ext2.c \
@@ -153,3 +162,6 @@ insert-clock: inserter user-clock $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 
 insert-echo: inserter user-echo $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER) && ./inserter echo 1 $(DISK_NAME).bin
+
+insert-hello: inserter user-hello $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER) && ./inserter hello 1 $(DISK_NAME).bin

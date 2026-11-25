@@ -117,7 +117,7 @@ static bool path_env_set(const char *value) {
 /* Ensure PATH has a default value before path_load() runs. */
 static void path_env_init(void) {
     if (path_env == NULL) {
-        (void)path_env_set("/bin");
+        (void)path_env_set("/bin:/");
     }
 }
 
@@ -330,6 +330,16 @@ static void path_save(void) {
     if (len == 0 || len > MAX_FILE_SIZE) {
         return;
     }
+    /* write() refuses to overwrite an existing file, so delete it first. */
+    struct EXT2DriverRequest request = {
+        .buf = NULL,
+        .name = name,
+        .name_len = (uint8_t)text_length(name),
+        .parent_inode = parent_inode,
+        .buffer_size = 0,
+        .is_directory = false,
+    };
+    call_syscall(SYS_DELETE, (uint32_t)&request, 0, 0);
     write_file(parent_inode, name, (const uint8_t *)path_env, len);
 }
 
@@ -1013,6 +1023,40 @@ static bool parse_number(const char *text, uint32_t *number) {
     return true;
 }
 
+/* Find a PID by process name from the "PID <n>: <name> [STATE]" lines of ps. */
+static bool find_pid_by_name(const char *target, uint32_t *pid) {
+    process_buffer[0] = '\0';
+    if (call_syscall(SYS_PS, (uint32_t)process_buffer,
+                     sizeof(process_buffer), 0) != 0) {
+        return false;
+    }
+    uint32_t target_length = text_length(target);
+    char *line = process_buffer;
+    while (*line != '\0') {
+        char *cursor = line + 4; /* skip "PID " */
+        uint32_t value = 0;
+        while (*cursor >= '0' && *cursor <= '9') {
+            value = value * 10u + (uint32_t)(*cursor++ - '0');
+        }
+        cursor += 2; /* skip ": " */
+        uint32_t index = 0;
+        while (index < target_length && cursor[index] == target[index]) {
+            index++;
+        }
+        if (index == target_length && cursor[index] == ' ') {
+            *pid = value;
+            return true;
+        }
+        while (*line != '\0' && *line != '\n') {
+            line++;
+        }
+        if (*line == '\n') {
+            line++;
+        }
+    }
+    return false;
+}
+
 static void command_exec(uint32_t argc, char *argv[]) {
     if (argc == 0 || argv == NULL || argv[0] == NULL) {
         print_error("exec: missing executable path\n");
@@ -1020,16 +1064,19 @@ static void command_exec(uint32_t argc, char *argv[]) {
     }
     const char *path = argv[0];
     char resolved[MAX_PATH_SIZE];
-    if (path[0] != '/') {
+    uint32_t parent_inode;
+    uint32_t size;
+    char name[MAX_PATH_SIZE];
+    /* Relative execution: try the current directory first, then PATH. */
+    if (path[0] != '/' &&
+        !(resolve_file_path(path, &parent_inode, name) &&
+          shell_get_file_size(parent_inode, name, &size) && size != 0)) {
         if (search_path(path, resolved, sizeof(resolved)) != 0) {
             print_error("exec: cannot find executable\n");
             return;
         }
         path = resolved;
     }
-    uint32_t parent_inode;
-    uint32_t size;
-    char name[MAX_PATH_SIZE];
     if (!resolve_file_path(path, &parent_inode, name) ||
         !shell_get_file_size(parent_inode, name, &size) || size == 0) {
         print_error("exec: cannot find executable\n");
@@ -1135,7 +1182,7 @@ static void print_help(void) {
     print_text_color("print matching lines\n", COLOR_DARK_GRAY);
     print_text_color("  ps                      ", COLOR_WHITE);
     print_text_color("list processes\n", COLOR_DARK_GRAY);
-    print_text_color("  kill pid                ", COLOR_WHITE);
+    print_text_color("  kill pid|name           ", COLOR_WHITE);
     print_text_color("terminate a process\n", COLOR_DARK_GRAY);
     print_text_color("  exec file [args...]     ", COLOR_WHITE);
     print_text_color("run a flat binary with argc/argv\n", COLOR_DARK_GRAY);
@@ -1223,9 +1270,16 @@ static void execute_command(char *argv[], uint32_t argc) {
         }
     } else if (text_equal(command, "kill") && argc == 2) {
         uint32_t pid;
-        if (!parse_number(argv[1], &pid) ||
+        if ((!parse_number(argv[1], &pid) &&
+             !find_pid_by_name(argv[1], &pid)) ||
             call_syscall(SYS_KILL, pid, 0, 0) != 0) {
             print_error("kill: invalid or inactive PID\n");
+        } else {
+            /* Clear the reserved status line (bottom row) used by
+             * background programs such as clock. */
+            for (uint8_t col = 0; col < 80u; col++) {
+                sys_fb_putchar(24u, col, ' ', COLOR_BLACK);
+            }
         }
     } else if (text_equal(command, "exec") && argc >= 2) {
         command_exec(argc - 1u, &argv[1]);

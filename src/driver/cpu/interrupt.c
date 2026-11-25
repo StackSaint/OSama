@@ -81,12 +81,15 @@ static volatile uint32_t system_ticks;
 
 #define SCROLLBACK_MAX_LINES 200
 #define SCROLLBACK_CELL_BYTES (FRAMEBUFFER_WIDTH * 2)
+/* Row FRAMEBUFFER_HEIGHT - 1 is reserved as a status line (e.g. clock), so
+ * the terminal only uses the rows above it and never scrolls over it. */
+#define TERMINAL_HEIGHT (FRAMEBUFFER_HEIGHT - 1)
 
 static uint8_t scrollback[SCROLLBACK_MAX_LINES][SCROLLBACK_CELL_BYTES];
 static uint32_t scrollback_head;
 static uint32_t scrollback_count;
 static uint32_t scroll_offset;
-static uint8_t live_screen[FRAMEBUFFER_HEIGHT][SCROLLBACK_CELL_BYTES];
+static uint8_t live_screen[TERMINAL_HEIGHT][SCROLLBACK_CELL_BYTES];
 
 static void sync_live_screen_row(uint8_t row) {
     uint8_t *video_memory = FRAMEBUFFER_MEMORY_OFFSET;
@@ -132,12 +135,12 @@ static void copy_row_to_framebuffer(uint8_t row, const uint8_t *source) {
 }
 
 static void render_scroll_view(void) {
-    uint32_t total_lines = scrollback_count + FRAMEBUFFER_HEIGHT;
-    uint32_t start = total_lines > scroll_offset + FRAMEBUFFER_HEIGHT
-        ? total_lines - scroll_offset - FRAMEBUFFER_HEIGHT
+    uint32_t total_lines = scrollback_count + TERMINAL_HEIGHT;
+    uint32_t start = total_lines > scroll_offset + TERMINAL_HEIGHT
+        ? total_lines - scroll_offset - TERMINAL_HEIGHT
         : 0;
 
-    for (uint8_t row = 0; row < FRAMEBUFFER_HEIGHT; ++row) {
+    for (uint8_t row = 0; row < TERMINAL_HEIGHT; ++row) {
         uint32_t line = start + row;
         uint8_t rendered_row[SCROLLBACK_CELL_BYTES];
         if (line < scrollback_count) {
@@ -149,7 +152,7 @@ static void render_scroll_view(void) {
         }
     }
     framebuffer_set_cursor(
-        scroll_offset == 0u ? syscall_cursor_row : 24,
+        scroll_offset == 0u ? syscall_cursor_row : TERMINAL_HEIGHT - 1,
         scroll_offset == 0u ? syscall_cursor_col : 0
     );
 }
@@ -157,24 +160,16 @@ static void render_scroll_view(void) {
 static void framebuffer_scroll_up(void) {
     append_scrollback_row(0);
     uint8_t *video_memory = FRAMEBUFFER_MEMORY_OFFSET;
-    for (uint16_t cell = 0; cell < (FRAMEBUFFER_HEIGHT - 1) * FRAMEBUFFER_WIDTH; ++cell) {
+    for (uint16_t cell = 0; cell < (TERMINAL_HEIGHT - 1) * FRAMEBUFFER_WIDTH; ++cell) {
         video_memory[cell * 2]     = video_memory[(cell + FRAMEBUFFER_WIDTH) * 2];
         video_memory[cell * 2 + 1] = video_memory[(cell + FRAMEBUFFER_WIDTH) * 2 + 1];
     }
     for (uint8_t col = 0; col < FRAMEBUFFER_WIDTH; ++col) {
-        framebuffer_write(FRAMEBUFFER_HEIGHT - 1, col, ' ', 0x07, 0x00);
+        framebuffer_write(TERMINAL_HEIGHT - 1, col, ' ', 0x07, 0x00);
     }
-    for (uint8_t row = 0; row + 1u < FRAMEBUFFER_HEIGHT; ++row) {
-        sync_live_screen_row(row + 1u);
-        for (uint16_t col = 0; col < SCROLLBACK_CELL_BYTES; ++col) {
-            live_screen[row][col] = live_screen[row + 1u][col];
-        }
-    }
-    for (uint16_t col = 0; col < SCROLLBACK_CELL_BYTES; ++col) {
-        live_screen[FRAMEBUFFER_HEIGHT - 1u][col] =
-            FRAMEBUFFER_MEMORY_OFFSET[
-                ((uint32_t)(FRAMEBUFFER_HEIGHT - 1u) * FRAMEBUFFER_WIDTH * 2u) + col
-            ];
+    /* Video memory is already shifted, so just mirror it into live_screen. */
+    for (uint8_t row = 0; row < TERMINAL_HEIGHT; ++row) {
+        sync_live_screen_row(row);
     }
 }
 
@@ -196,7 +191,7 @@ static void framebuffer_write_char(char c, uint8_t color) {
         }
     }
 
-    while (syscall_cursor_row >= FRAMEBUFFER_HEIGHT) {
+    while (syscall_cursor_row >= TERMINAL_HEIGHT) {
         framebuffer_scroll_up();
         syscall_cursor_row--;
     }
@@ -336,7 +331,7 @@ void handle_syscall(struct InterruptFrame *frame) {
             scrollback_head = 0;
             scrollback_count = 0;
             scroll_offset = 0;
-            for (uint32_t row = 0; row < FRAMEBUFFER_HEIGHT; ++row) {
+            for (uint32_t row = 0; row < TERMINAL_HEIGHT; ++row) {
                 for (uint16_t col = 0; col < SCROLLBACK_CELL_BYTES; ++col) {
                     live_screen[row][col] = 0;
                 }
