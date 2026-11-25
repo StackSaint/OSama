@@ -3,10 +3,28 @@
 #include "header/cpu/interrupt.h"
 #include "header/text/framebuffer.h"
 
-/* The pointer moves over a virtual 640 x 400 pixel area (8 x 16 pixels per
- * text cell, like the VGA text font). */
-#define MOUSE_AREA_WIDTH   (FRAMEBUFFER_WIDTH * 8)
+/* Relative mode: the pointer moves over a virtual 720 x 400 pixel area, the
+ * same size as the VGA text screen (9 x 16 pixels per cell), so one pixel of
+ * host mouse movement is one pixel on screen. */
+#define MOUSE_AREA_WIDTH   (FRAMEBUFFER_WIDTH * 9)
 #define MOUSE_AREA_HEIGHT  (FRAMEBUFFER_HEIGHT * 16)
+
+/* vmmouse (VMware backdoor, also offered by QEMU's "pc" machine): reports the
+ * absolute host pointer position, so the OS pointer follows the real cursor
+ * exactly and the window does not need to grab the mouse. */
+#define VMMOUSE_MAGIC              0x564D5868u
+#define VMMOUSE_PORT               0x5658u
+#define VMMOUSE_CMD_GETVERSION     10u
+#define VMMOUSE_CMD_DATA           39u
+#define VMMOUSE_CMD_STATUS         40u
+#define VMMOUSE_CMD_COMMAND        41u
+#define VMMOUSE_ENABLE             0x45414552u
+#define VMMOUSE_REQUEST_ABSOLUTE   0x53424152u
+#define VMMOUSE_VERSION_ID         0x3442554Au
+#define VMMOUSE_ERROR              0xFFFF0000u
+#define VMMOUSE_BUTTON_LEFT        0x20u
+#define VMMOUSE_BUTTON_RIGHT       0x10u
+#define VMMOUSE_BUTTON_MIDDLE      0x08u
 #define MOUSE_WAIT_LIMIT   100000u
 #define WHEEL_LINES        3
 
@@ -21,6 +39,7 @@ static uint8_t packet[4];
 static uint8_t packet_index;
 static int32_t wheel_lines;
 
+static bool vmmouse_active;
 static bool pointer_enabled;   /* pointer drawn after the first packet */
 static bool pointer_visible;
 static uint16_t pointer_cell;
@@ -69,6 +88,43 @@ static bool mouse_set_sample_rate(uint8_t rate) {
     return mouse_write(MOUSE_CMD_SAMPLE_RATE) && mouse_write(rate);
 }
 
+/* One backdoor call: EAX = magic, EBX = argument, ECX = command, DX = port.
+ * The answer comes back in EAX, EBX, ECX and EDX. */
+static void vmmouse_call(uint32_t command, uint32_t argument, uint32_t result[4]) {
+    uint32_t eax = VMMOUSE_MAGIC;
+    uint32_t ebx = argument;
+    uint32_t ecx = command;
+    uint32_t edx = VMMOUSE_PORT;
+    __asm__ volatile ("inl %%dx, %%eax"
+                      : "+a"(eax), "+b"(ebx), "+c"(ecx), "+d"(edx)
+                      :
+                      : "esi", "edi", "memory");
+    result[0] = eax;
+    result[1] = ebx;
+    result[2] = ecx;
+    result[3] = edx;
+}
+
+/* Switch to absolute positioning if the vmmouse backdoor exists. */
+static bool vmmouse_initialize(void) {
+    uint32_t r[4];
+    vmmouse_call(VMMOUSE_CMD_GETVERSION, 0, r);
+    if (r[1] != VMMOUSE_MAGIC || r[0] == 0xFFFFFFFFu) {
+        return false;  /* no backdoor (real hardware or vmport=off) */
+    }
+    vmmouse_call(VMMOUSE_CMD_COMMAND, VMMOUSE_ENABLE, r);
+    vmmouse_call(VMMOUSE_CMD_STATUS, 0, r);
+    if ((r[0] & 0x0000FFFFu) == 0u) {
+        return false;
+    }
+    vmmouse_call(VMMOUSE_CMD_DATA, 1, r);
+    if (r[0] != VMMOUSE_VERSION_ID) {
+        return false;
+    }
+    vmmouse_call(VMMOUSE_CMD_COMMAND, VMMOUSE_REQUEST_ABSOLUTE, r);
+    return true;
+}
+
 void mouse_initialize(void) {
     /* Drop stale bytes left in the controller. */
     for (uint32_t i = 0; i < 16u && (in(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL); i++) {
@@ -105,8 +161,12 @@ void mouse_initialize(void) {
         return;
     }
     mouse_state.present = true;
-    mouse_state.col = (uint8_t)(pointer_x / 8);
+    mouse_state.col = (uint8_t)(pointer_x / 9);
     mouse_state.row = (uint8_t)(pointer_y / 16);
+    vmmouse_active = vmmouse_initialize();
+    if (vmmouse_active) {
+        mouse_state.has_wheel = true;
+    }
 
     /* Unmask IRQ12 on the slave PIC and the cascade line (IRQ2) on the master. */
     out(PIC2_DATA, in(PIC2_DATA) & (uint8_t)~(1u << (IRQ_MOUSE - 8)));
@@ -167,10 +227,54 @@ static void handle_packet(void) {
     }
 
     mouse_cursor_hide();
-    mouse_state.col = (uint8_t)(pointer_x / 8);
+    mouse_state.col = (uint8_t)(pointer_x / 9);
     mouse_state.row = (uint8_t)(pointer_y / 16);
     pointer_enabled = true;
     mouse_cursor_show();
+}
+
+/* Read every queued vmmouse event (4 words each: buttons, x, y, wheel). */
+static void vmmouse_poll(void) {
+    uint32_t r[4];
+    while (true) {
+        vmmouse_call(VMMOUSE_CMD_STATUS, 0, r);
+        if ((r[0] & VMMOUSE_ERROR) == VMMOUSE_ERROR) {
+            /* Backdoor reset: go back to the plain PS/2 packets. */
+            vmmouse_active = false;
+            return;
+        }
+        if ((r[0] & 0x0000FFFFu) < 4u) {
+            return;
+        }
+        vmmouse_call(VMMOUSE_CMD_DATA, 4, r);
+
+        uint32_t flags = r[0];
+        uint8_t buttons = 0;
+        if (flags & VMMOUSE_BUTTON_LEFT) {
+            buttons |= MOUSE_BUTTON_LEFT;
+        }
+        if (flags & VMMOUSE_BUTTON_RIGHT) {
+            buttons |= MOUSE_BUTTON_RIGHT;
+        }
+        if (flags & VMMOUSE_BUTTON_MIDDLE) {
+            buttons |= MOUSE_BUTTON_MIDDLE;
+        }
+        mouse_state.buttons = buttons;
+
+        /* x and y go from 0 to 0xFFFF across the whole window. */
+        pointer_x = (int32_t)(((r[1] & 0xFFFFu) * (uint32_t)MOUSE_AREA_WIDTH) >> 16);
+        pointer_y = (int32_t)(((r[2] & 0xFFFFu) * (uint32_t)MOUSE_AREA_HEIGHT) >> 16);
+
+        /* Wheel: signed byte, negative when rolled forward (up). */
+        int32_t dz = (int32_t)(int8_t)(r[3] & 0xFFu);
+        wheel_lines -= dz * WHEEL_LINES;
+
+        mouse_cursor_hide();
+        mouse_state.col = (uint8_t)(pointer_x / 9);
+        mouse_state.row = (uint8_t)(pointer_y / 16);
+        pointer_enabled = true;
+        mouse_cursor_show();
+    }
 }
 
 void mouse_isr(void) {
@@ -180,6 +284,13 @@ void mouse_isr(void) {
     }
     uint8_t data = in(PS2_DATA_PORT);
     if ((status & PS2_STATUS_AUX_DATA) == 0 || !mouse_state.present) {
+        return;
+    }
+
+    /* With vmmouse, the PS/2 byte only signals that events are queued. */
+    if (vmmouse_active) {
+        packet_index = 0;
+        vmmouse_poll();
         return;
     }
 
