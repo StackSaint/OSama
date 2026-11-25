@@ -28,9 +28,12 @@ LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 .PHONY: run all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple user-guess inserter insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 
 # PC speaker sound goes to PulseAudio (WSLg / Linux desktop).
+# show-cursor=on keeps the normal host arrow visible: with the absolute
+# vmmouse pointer QEMU would otherwise hide it (WSLg then shows an odd cursor).
 run: all insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 	@$(QEMU) \
 		-rtc base=utc \
+		-display gtk,show-cursor=on \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
