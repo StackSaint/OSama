@@ -1730,6 +1730,12 @@ static void command_exec(uint32_t argc, char *argv[]) {
         print_error("exec: cannot find executable\n");
         return;
     }
+    /* Same guard as typing "shell": the shell binary is linked for 0x0
+     * (not 0x1000) and a second copy would fight over the keyboard. */
+    if (text_equal(name, "shell") || text_equal(name, "shell_elf")) {
+        print_error("shell: recursive shell invocation is not allowed\n");
+        return;
+    }
     struct EXT2DriverRequest request = {
         .buf = (void *)0x1000u,
         .name = name,
@@ -1771,7 +1777,9 @@ static void command_exec(uint32_t argc, char *argv[]) {
             /* The program may have drawn straight to the screen: redraw the
              * terminal and blank the status line. */
             call_syscall(SYS_SCROLL, 3u, 0, 0);
-            for (uint8_t col = 0; col < 80u; col++) {
+            /* Blank the program's part of the status line only; columns
+             * 72-79 belong to the background clock. */
+            for (uint8_t col = 0; col < 72u; col++) {
                 sys_fb_putchar(24u, col, ' ', COLOR_BLACK);
             }
             print_text("^C\n");

@@ -251,23 +251,17 @@ void kernel_setup(void) {
     set_tss_register();
     show_boot_splash_screen();
 
-    for (uint32_t address = 0;
-         address < 0x100000;
-         address += PAGE_FRAME_SIZE) {
-        if (!paging_allocate_check(PAGE_FRAME_SIZE)) {
-            break; /* remaining low pages will be demand-paged on access */
-        }
-        paging_allocate_user_page_frame(
-            &_paging_kernel_page_directory,
-            (void *)address
-        );
-    }
-    if (paging_allocate_check(PAGE_FRAME_SIZE)) {
-        paging_allocate_user_page_frame(
-            &_paging_kernel_page_directory,
-            (void *)0x3FF000
-        );
-    }
+    /* User programs run in their own page directories (process.c), so the
+     * kernel page directory needs no low-memory user pages. Mapping the whole
+     * first MiB here used 257 frames and, with a small SYSTEM_MEMORY_MB
+     * (e.g. 5), left no frame for the shell. Only the swap self-test needs
+     * its test page. */
+#if SWAP_SELF_TEST
+    paging_allocate_user_page_frame(
+        &_paging_kernel_page_directory,
+        (void *)0x000FE000
+    );
+#endif
 
 #if DISK_DRIVER_SELF_TEST
     framebuffer_write_text(1, 0, "Disk LBA 17 test: ", 0x0F);

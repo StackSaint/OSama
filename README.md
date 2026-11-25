@@ -113,12 +113,19 @@ uptime                   show uptime in ms
 shutdown                 power off system (ACPI 0x604)
 exit                     exit this process
 export [add|remove] dir  manage PATH directories
+export dump              show the PATH dynamic array on the heap
+fetch / neofetch         show the OSama logo and system info
+mouse                    show mouse position and buttons
 name [args...]           run a program found in PATH
 cmd1 | cmd2              pipe output, e.g. ls | grep sh
 file.sh                  run a shell script (up to 3 levels of nesting)
 ```
 
-**User programs** (located in `/bin`): `echo`, `hello`, `clock`.
+**User programs** (located in the root folder `/`): `echo`, `hello`,
+`clock` (background), `guess` (number guessing game) and `badapple`
+(plays Bad Apple!! from `/badapple.dat`; stop with Ctrl+C or `q`).
+Every program except `clock` runs in the foreground: the shell waits until
+it exits, and Ctrl+C stops it.
 
 `find` mencocokkan pola sebagai substring pada nama/path dan membatasi
 penelusuran hingga 8 tingkat direktori. `cat`, `cp`, dan `grep` mendukung
@@ -127,8 +134,10 @@ file maupun folder. `rmdir` hanya berhasil untuk direktori kosong.
 Pembacaan/listing direktori dibatasi hingga 2048 byte. Path dibatasi hingga 127
 karakter.
 
-**Keyboard shortcuts:** Up/Down (command history), PageUp/PageDown (scroll),
-Tab (autocomplete commands and paths), Ctrl+C (cancel current line).
+**Keyboard shortcuts:** Up/Down (command history), Left/Right/Home/End and
+Delete (edit the line), PageUp/PageDown or the mouse wheel (scroll), Tab
+(autocomplete commands and paths), Ctrl+C (cancel the line or stop the
+running program). A left mouse click on the input line moves the cursor.
 
 
 ```bash
