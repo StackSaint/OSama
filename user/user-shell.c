@@ -1343,53 +1343,6 @@ static bool find_pid_by_name(const char *target, uint32_t *pid) {
     return false;
 }
 
-static bool count_processes_by_name(const char *target, uint32_t *count) {
-    process_buffer[0] = '\0';
-    if (call_syscall(SYS_PS, (uint32_t)process_buffer,
-                     sizeof(process_buffer), 0) != 0) {
-        return false;
-    }
-
-    uint32_t target_length = text_length(target);
-    uint32_t matches = 0;
-    char *line = process_buffer;
-    while (*line != '\0') {
-        if (line[0] == 'P' && line[1] == 'I' &&
-            line[2] == 'D' && line[3] == ' ') {
-            char *cursor = line + 4;
-            while (*cursor >= '0' && *cursor <= '9') {
-                cursor++;
-            }
-            if (cursor[0] == ':' && cursor[1] == ' ') {
-                cursor += 2;
-                uint32_t name_length = 0;
-                while (cursor[name_length] != '\0' &&
-                       cursor[name_length] != ' ' &&
-                       cursor[name_length] != '\n') {
-                    name_length++;
-                }
-                if (name_length == target_length) {
-                    uint32_t i = 0;
-                    while (i < target_length && cursor[i] == target[i]) {
-                        i++;
-                    }
-                    if (i == target_length) {
-                        matches++;
-                    }
-                }
-            }
-        }
-        while (*line != '\0' && *line != '\n') {
-            line++;
-        }
-        if (*line == '\n') {
-            line++;
-        }
-    }
-    *count = matches;
-    return true;
-}
-
 static void command_exec(uint32_t argc, char *argv[]) {
     if (argc == 0 || argv == NULL || argv[0] == NULL) {
         print_error("exec: missing executable path\n");
@@ -1415,13 +1368,6 @@ static void command_exec(uint32_t argc, char *argv[]) {
         print_error("exec: cannot find executable\n");
         return;
     }
-    bool wait_for_clock = text_equal(name, "clock");
-    uint32_t clocks_before = 0;
-    if (wait_for_clock &&
-        !count_processes_by_name("clock", &clocks_before)) {
-        print_error("exec: cannot inspect running processes\n");
-        return;
-    }
     struct EXT2DriverRequest request = {
         .buf = (void *)0x1000u,
         .name = name,
@@ -1440,21 +1386,6 @@ static void command_exec(uint32_t argc, char *argv[]) {
         print_error("exec: process creation failed (");
         print_number_color((uint32_t)result, COLOR_RED);
         print_error(")\n");
-        return;
-    }
-    if (wait_for_clock) {
-        output_flush();
-        while (true) {
-            uint32_t clocks_running;
-            if (!count_processes_by_name("clock", &clocks_running)) {
-                print_error("exec: cannot inspect running processes\n");
-                output_flush();
-                return;
-            }
-            if (clocks_running <= clocks_before) {
-                break;
-            }
-        }
         return;
     }
     uint32_t start_tick = (uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0);
@@ -1623,7 +1554,7 @@ static void print_help(void) {
     print_text_color("  echo [args...]          ", COLOR_WHITE);
     print_text_color("print argc/argv and arguments\n", COLOR_DARK_GRAY);
     print_text_color("  clock                   ", COLOR_WHITE);
-    print_text_color("clock app (Ctrl+C to return)\n", COLOR_DARK_GRAY);
+    print_text_color("background clock (stop: kill clock)\n", COLOR_DARK_GRAY);
     print_text_color("Keys:\n", COLOR_GREEN);
     print_text_color("  Up / Down               ", COLOR_WHITE);
     print_text_color("recent commands\n", COLOR_DARK_GRAY);

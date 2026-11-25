@@ -2,9 +2,7 @@
 #include <stdbool.h>
 #include "header/syscall/syscall.h"
 #include "header/driver/cmos.h"
-#include "header/driver/keyboard.h"
 
-#define COLOR_BLACK      0x00
 #define COLOR_GREEN      0x02
 
 /* VGA text mode: 80 kolom x 25 baris. Jam ditempatkan di baris paling
@@ -36,19 +34,6 @@ static uint32_t sys_get_time_ms(void) {
     return (uint32_t)system_call(SYS_GET_TIME, 0, 0, 0);
 }
 
-static bool clock_exit_requested(void) {
-    char key = sys_getkey();
-    uint32_t status = sys_get_key_status();
-    return (uint8_t)key == KEY_CTRL_C ||
-           (status & SYS_KEY_STATUS_CTRL_C) != 0u;
-}
-
-static void clear_clock_status(void) {
-    for (uint8_t col = 0; col < 80u; col++) {
-        sys_fb_putchar(FRAMEBUFFER_ROW, col, ' ', COLOR_BLACK);
-    }
-}
-
 int main(void) {
     struct RTCTime now;
     uint8_t last_second = 0xFF;
@@ -58,14 +43,11 @@ int main(void) {
     }
     uint32_t last_tick = sys_get_time_ms();
 
-    /* Gambar jam pada status line; shell menunggu proses ini selesai. */
+    /* Gambar ulang jam:menit:detik di pojok kanan bawah layar setiap kali
+     * detik berubah, tanpa mencetak ke baris terminal, sehingga shell tetap
+     * dapat dipakai seperti biasa. Hentikan dengan `kill <pid>`. */
     while (true) {
         /* SYS_GET_RTC already returns WIB (UTC+7). */
-        if (clock_exit_requested()) {
-            clear_clock_status();
-            sys_exit();
-            return 0;
-        }
         if (sys_get_rtc(&now) == 0) {
             if (now.second != last_second) {
                 last_second = now.second;
@@ -84,11 +66,6 @@ int main(void) {
         }
 
         while (sys_get_time_ms() - last_tick < CLOCK_UPDATE_MS) {
-            if (clock_exit_requested()) {
-                clear_clock_status();
-                sys_exit();
-                return 0;
-            }
         }
         last_tick += CLOCK_UPDATE_MS;
     }
