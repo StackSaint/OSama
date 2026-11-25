@@ -192,8 +192,13 @@ static void framebuffer_write_char(char c, uint8_t color) {
         syscall_cursor_col = 0;
         syscall_cursor_row++;
     } else if (c == '\b') {
+        /* Step back one cell, continuing at the end of the previous row so
+         * the shell can move through input lines that wrapped. */
         if (syscall_cursor_col > 0) {
             syscall_cursor_col--;
+        } else if (syscall_cursor_row > 0) {
+            syscall_cursor_row--;
+            syscall_cursor_col = FRAMEBUFFER_WIDTH - 1;
         }
     } else {
         framebuffer_write(syscall_cursor_row, syscall_cursor_col, c, color, 0x00);
@@ -349,6 +354,29 @@ void handle_syscall(struct InterruptFrame *frame) {
                 ((uint32_t)state.buttons << 16) |
                 ((uint32_t)state.row << 8) |
                 (uint32_t)state.col;
+            break;
+        }
+        case SYS_GET_TEXT_CURSOR:
+            frame->cpu.general.eax =
+                ((uint32_t)syscall_cursor_row << 8) | (uint32_t)syscall_cursor_col;
+            break;
+        case SYS_SYSINFO: {
+            struct SystemInfo *info = (struct SystemInfo *)frame->cpu.general.ebx;
+            if (info == NULL) {
+                frame->cpu.general.eax = (uint32_t)-1;
+                break;
+            }
+            uint32_t total_blocks = 0;
+            uint32_t free_blocks = 0;
+            ext2_get_disk_usage(&total_blocks, &free_blocks);
+            info->memory_total_kb = PAGE_FRAME_MAX_COUNT * (PAGE_FRAME_SIZE / 1024u);
+            info->memory_free_kb =
+                page_manager_state.free_page_frame_count * (PAGE_FRAME_SIZE / 1024u);
+            info->disk_total_kb = total_blocks * BLOCK_SIZE / 1024u;
+            info->disk_free_kb = free_blocks * BLOCK_SIZE / 1024u;
+            info->process_count = process_manager_state.active_process_count;
+            info->process_max = PROCESS_COUNT_MAX;
+            frame->cpu.general.eax = 0;
             break;
         }
         case SYS_FB_BLIT:

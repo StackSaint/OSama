@@ -126,6 +126,15 @@ void keyboard_isr(void) {
             case EXT_SCANCODE_RIGHT:
                 keyboard_state.keyboard_buffer = KEY_RIGHT;
                 break;
+            case EXT_SCANCODE_HOME:
+                keyboard_state.keyboard_buffer = KEY_HOME;
+                break;
+            case EXT_SCANCODE_END:
+                keyboard_state.keyboard_buffer = KEY_END;
+                break;
+            case EXT_SCANCODE_DELETE:
+                keyboard_state.keyboard_buffer = KEY_DELETE;
+                break;
             case 0x49:
                 keyboard_state.keyboard_buffer = KEY_PAGE_UP;
                 break;

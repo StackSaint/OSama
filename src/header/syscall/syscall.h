@@ -34,6 +34,18 @@ struct EXT2DriverRequest;
 #define SYS_READ_AT        24
 #define SYS_FB_BLIT        25
 #define SYS_MOUSE_GET      26
+#define SYS_SYSINFO        27
+#define SYS_GET_TEXT_CURSOR 28
+
+/* Filled by SYS_SYSINFO */
+struct SystemInfo {
+    uint32_t memory_total_kb;
+    uint32_t memory_free_kb;
+    uint32_t disk_total_kb;
+    uint32_t disk_free_kb;
+    uint32_t process_count;
+    uint32_t process_max;
+};
 
 /* SYS_GET_KEY_STATUS return flags (also cleared once read) */
 #define SYS_KEY_STATUS_CTRL_C    0x01u
@@ -187,6 +199,19 @@ static inline void sys_fb_blit(uint16_t start, const uint16_t *cells, uint16_t c
  */
 static inline uint32_t sys_mouse_get(void) {
     return (uint32_t)system_call(SYS_MOUSE_GET, 0, 0, 0);
+}
+
+/**
+ * Position where the next SYS_PUTCHAR character will be written:
+ * bits 8-15 row, bits 0-7 column.
+ */
+static inline uint32_t sys_get_text_cursor(void) {
+    return (uint32_t)system_call(SYS_GET_TEXT_CURSOR, 0, 0, 0);
+}
+
+/** Memory, disk and process usage (see struct SystemInfo). 0 on success. */
+static inline int32_t sys_sysinfo(struct SystemInfo *info) {
+    return system_call(SYS_SYSINFO, (uint32_t)info, 0, 0);
 }
 
 #endif

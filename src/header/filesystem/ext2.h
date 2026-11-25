@@ -337,6 +337,11 @@ int8_t read(struct EXT2DriverRequest request);
 int8_t read_at(struct EXT2DriverRequest request, uint32_t offset, uint32_t *bytes_read);
 
 /**
+ * @brief Disk size and free space from the superblock, in blocks of BLOCK_SIZE
+ */
+void ext2_get_disk_usage(uint32_t *total_blocks, uint32_t *free_blocks);
+
+/**
  * Get the size of a regular file without reading its contents.
  */
 int8_t get_file_size(const struct EXT2DriverRequest *request, uint32_t *size);

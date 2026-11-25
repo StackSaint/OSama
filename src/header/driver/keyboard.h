@@ -10,6 +10,9 @@
 #define EXT_SCANCODE_DOWN      0x50
 #define EXT_SCANCODE_LEFT      0x4B
 #define EXT_SCANCODE_RIGHT     0x4D
+#define EXT_SCANCODE_HOME      0x47
+#define EXT_SCANCODE_END       0x4F
+#define EXT_SCANCODE_DELETE    0x53
 
 #define KEY_UP                 0x11
 #define KEY_DOWN               0x12
@@ -17,6 +20,9 @@
 #define KEY_RIGHT              0x14
 #define KEY_PAGE_UP            0x15
 #define KEY_PAGE_DOWN          0x16
+#define KEY_HOME               0x17
+#define KEY_END                0x18
+#define KEY_DELETE             0x19
 
 /* ASCII control code delivered to user-space when Ctrl+C is pressed.
  * Falls outside the printable range (0x20..0x7E) and the KEY_* special range,

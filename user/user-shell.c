@@ -4,6 +4,7 @@
 #include "header/syscall/syscall.h"
 #include "header/driver/cmos.h"
 #include "header/driver/keyboard.h"
+#include "osama-logo.h"
 
 #define MAX_INPUT_SIZE 256u
 #define MAX_PATH_SIZE 128u
@@ -611,6 +612,146 @@ static void command_time(void) {
     print_text_color(text, COLOR_LIGHT_GRAY);
 }
 
+/* ---- fetch: neofetch-style system summary with the OSama logo ---- */
+
+#define FETCH_INFO_FIRST_ROW 3u  /* centers the info next to the logo */
+#define FETCH_INFO_LINES     8u
+#define FETCH_INFO_WIDTH     (80u - OSAMA_LOGO_WIDTH - 3u)
+
+static char cpu_brand[49];
+
+/* CPU name from CPUID (allowed in ring 3). Falls back to the vendor id. */
+static void read_cpu_brand(void) {
+    uint32_t regs[12];
+    uint32_t max_leaf;
+    __asm__ volatile ("cpuid"
+                      : "=a"(max_leaf), "=b"(regs[0]), "=c"(regs[2]), "=d"(regs[1])
+                      : "a"(0x80000000u));
+    char *text = (char *)regs;
+    if (max_leaf >= 0x80000004u) {
+        for (uint32_t i = 0; i < 3u; i++) {
+            __asm__ volatile ("cpuid"
+                              : "=a"(regs[i * 4u]), "=b"(regs[i * 4u + 1u]),
+                                "=c"(regs[i * 4u + 2u]), "=d"(regs[i * 4u + 3u])
+                              : "a"(0x80000002u + i));
+        }
+        text[48] = '\0';
+    } else {
+        uint32_t ignored;
+        /* Vendor id is returned in EBX, EDX, ECX order. */
+        __asm__ volatile ("cpuid"
+                          : "=a"(ignored), "=b"(regs[0]), "=d"(regs[1]), "=c"(regs[2])
+                          : "a"(0u));
+        text[12] = '\0';
+    }
+    while (*text == ' ') {
+        text++;
+    }
+    copy_text(cpu_brand, text, sizeof(cpu_brand));
+}
+
+static void print_limited(const char *text, uint8_t color, uint32_t *budget) {
+    while (*text != '\0' && *budget > 0u) {
+        print_char_color(*text++, color);
+        (*budget)--;
+    }
+}
+
+static void print_number_limited(uint32_t value, uint8_t color, uint32_t *budget) {
+    char digits[11];
+    char text[11];
+    uint32_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0u);
+    for (uint32_t i = 0; i < count; i++) {
+        text[i] = digits[count - 1u - i];
+    }
+    text[count] = '\0';
+    print_limited(text, color, budget);
+}
+
+static void fetch_label(const char *label, uint32_t *budget) {
+    print_limited(label, COLOR_LIGHT_GREEN, budget);
+    print_limited(": ", COLOR_DARK_GRAY, budget);
+}
+
+static void fetch_info_line(uint32_t line, const struct SystemInfo *info) {
+    uint32_t budget = FETCH_INFO_WIDTH;
+    switch (line) {
+        case 0:
+            print_limited("user", COLOR_LIGHT_GREEN, &budget);
+            print_limited("@", COLOR_WHITE, &budget);
+            print_limited("OSama", COLOR_LIGHT_GREEN, &budget);
+            break;
+        case 1:
+            print_limited("----------", COLOR_DARK_GRAY, &budget);
+            break;
+        case 2:
+            fetch_label("OS", &budget);
+            print_limited("OSama i386 (32-bit protected mode)", COLOR_LIGHT_GRAY, &budget);
+            break;
+        case 3:
+            fetch_label("Shell", &budget);
+            print_limited("OSama shell (ring 3)", COLOR_LIGHT_GRAY, &budget);
+            break;
+        case 4:
+            fetch_label("Display", &budget);
+            print_limited("VGA text mode 80x25", COLOR_LIGHT_GRAY, &budget);
+            break;
+        case 5:
+            fetch_label("CPU", &budget);
+            print_limited(cpu_brand, COLOR_LIGHT_GRAY, &budget);
+            break;
+        case 6:
+            fetch_label("Memory", &budget);
+            print_number_limited((info->memory_total_kb - info->memory_free_kb) / 1024u,
+                                 COLOR_LIGHT_GRAY, &budget);
+            print_limited(" MiB / ", COLOR_LIGHT_GRAY, &budget);
+            print_number_limited(info->memory_total_kb / 1024u, COLOR_LIGHT_GRAY, &budget);
+            print_limited(" MiB", COLOR_LIGHT_GRAY, &budget);
+            break;
+        case 7:
+            fetch_label("Disk (/)", &budget);
+            print_number_limited(info->disk_total_kb - info->disk_free_kb,
+                                 COLOR_LIGHT_GRAY, &budget);
+            print_limited(" KiB / ", COLOR_LIGHT_GRAY, &budget);
+            print_number_limited(info->disk_total_kb, COLOR_LIGHT_GRAY, &budget);
+            print_limited(" KiB (EXT2)", COLOR_LIGHT_GRAY, &budget);
+            break;
+        default:
+            break;
+    }
+}
+
+static void command_fetch(void) {
+    struct SystemInfo info = {0};
+    sys_sysinfo(&info);
+    if (cpu_brand[0] == '\0') {
+        read_cpu_brand();
+    }
+
+    uint32_t rows = FETCH_INFO_FIRST_ROW + FETCH_INFO_LINES;
+    if (rows < OSAMA_LOGO_ROWS) {
+        rows = OSAMA_LOGO_ROWS;
+    }
+    for (uint32_t row = 0; row < rows; row++) {
+        if (row < OSAMA_LOGO_ROWS) {
+            print_text_color(osama_logo[row], COLOR_WHITE);
+        } else {
+            for (uint32_t col = 0; col < OSAMA_LOGO_WIDTH; col++) {
+                print_char(' ');
+            }
+        }
+        print_text_color("  ", COLOR_BLACK);
+        if (row >= FETCH_INFO_FIRST_ROW) {
+            fetch_info_line(row - FETCH_INFO_FIRST_ROW, &info);
+        }
+        print_char('\n');
+    }
+}
+
 static void print_prompt(void) {
     print_text_color("OSama", COLOR_GREEN);
     print_text_color("@", COLOR_GREEN);
@@ -858,7 +999,7 @@ static uint32_t autocomplete(char *buffer, uint32_t index) {
         "help", "clear", "ls", "cd", "mkdir", "rmdir", "rm",
         "cat", "cp", "mv", "find", "grep", "ps", "kill", "exec",
         "time", "uptime", "shutdown", "exit", "export",
-        "echo", "hello", "clock", "badapple", "guess", "mouse"
+        "echo", "hello", "clock", "badapple", "guess", "mouse", "fetch", "neofetch"
     };
     uint32_t candidate_count = 0;
     for (uint32_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
@@ -904,51 +1045,127 @@ static uint32_t autocomplete(char *buffer, uint32_t index) {
     return index;
 }
 
+/* ---- line editing ----
+ * `length` is the number of typed characters and `cursor` the position of the
+ * text cursor inside them (0..length). The screen cursor is moved with '\b'
+ * (one cell back, wrapping to the previous row) and by re-printing characters
+ * (one cell forward), so long input lines that wrap are handled too. */
+
+static void input_move_cursor(const char *buffer, uint32_t from, uint32_t to) {
+    while (from > to) {
+        print_char('\b');
+        from--;
+    }
+    while (from < to) {
+        print_char(buffer[from]);
+        from++;
+    }
+}
+
+/* Re-print buffer[from..length), blank `extra` cells after it, then bring the
+ * screen cursor back to position `cursor`. */
+static void input_redraw_tail(const char *buffer, uint32_t from,
+                              uint32_t length, uint32_t extra, uint32_t cursor) {
+    for (uint32_t i = from; i < length; i++) {
+        print_char(buffer[i]);
+    }
+    for (uint32_t i = 0; i < extra; i++) {
+        print_char(' ');
+    }
+    for (uint32_t i = length + extra; i > cursor; i--) {
+        print_char('\b');
+    }
+}
+
+static void input_insert(char *buffer, uint32_t *length, uint32_t *cursor, char character) {
+    if (*length + 1u >= MAX_INPUT_SIZE) {
+        return;
+    }
+    for (uint32_t i = *length; i > *cursor; i--) {
+        buffer[i] = buffer[i - 1u];
+    }
+    buffer[*cursor] = character;
+    (*length)++;
+    buffer[*length] = '\0';
+    input_redraw_tail(buffer, *cursor, *length, 0u, *cursor + 1u);
+    (*cursor)++;
+}
+
+/* Remove the character at `position` (cursor ends there). */
+static void input_remove(char *buffer, uint32_t *length, uint32_t *cursor, uint32_t position) {
+    input_move_cursor(buffer, *cursor, position);
+    for (uint32_t i = position; i + 1u < *length; i++) {
+        buffer[i] = buffer[i + 1u];
+    }
+    (*length)--;
+    buffer[*length] = '\0';
+    input_redraw_tail(buffer, position, *length, 1u, position);
+    *cursor = position;
+}
+
+/* Left click on the input line moves the text cursor to the clicked cell. */
+static void input_handle_click(const char *buffer, uint32_t length, uint32_t *cursor,
+                               uint32_t mouse) {
+    call_syscall(SYS_SCROLL, 3u, 0, 0);
+    output_flush();
+    uint32_t text_cursor = sys_get_text_cursor();
+    int32_t here = (int32_t)((text_cursor >> 8) & 0xFFu) * 80 + (int32_t)(text_cursor & 0xFFu);
+    int32_t clicked = (int32_t)((mouse >> 8) & 0xFFu) * 80 + (int32_t)(mouse & 0xFFu);
+    int32_t target = (int32_t)*cursor + (clicked - here);
+    if (target < 0 || target > (int32_t)length) {
+        return;  /* clicked outside the line being typed */
+    }
+    input_move_cursor(buffer, *cursor, (uint32_t)target);
+    *cursor = (uint32_t)target;
+    output_flush();
+}
+
 static void read_line(char *buffer) {
-    uint32_t index = 0;
+    uint32_t length = 0;
+    uint32_t cursor = 0;
+    bool left_was_down = true;  /* ignore a button already held at the prompt */
+    buffer[0] = '\0';
     command_history_position = command_history_count;
     while (true) {
         int32_t key = call_syscall(SYS_GETKEY, 0, 0, 0);
         char character = (char)key;
         if (character == '\0') {
+            uint32_t mouse = sys_mouse_get();
+            bool left_down = ((mouse >> 16) & 0x01u) != 0u;  /* left button */
+            if (left_down && !left_was_down) {
+                input_handle_click(buffer, length, &cursor, mouse);
+            }
+            left_was_down = left_down;
             continue;
         }
         if (character == (char)KEY_CTRL_C) {
-            while (index > 0u) {
-                index--;
+            input_move_cursor(buffer, cursor, length);
+            while (length > 0u) {
+                length--;
                 print_text("\b \b");
             }
             print_text("^C\n");
             output_flush();
-            buffer[index] = '\0';
+            buffer[0] = '\0';
             return;
         }
-        if (character == (char)KEY_UP) {
-            if (command_history_position > 0u) {
-            call_syscall(SYS_SCROLL, 3u, 0, 0);
-            command_history_position--;
-            index = replace_input_line(
-                buffer,
-                index,
-                command_history[command_history_position]
-            );
-            output_flush();
-            }
-            continue;
-        }
-        if (character == (char)KEY_DOWN) {
-            if (command_history_position < command_history_count) {
+        if (character == (char)KEY_UP || character == (char)KEY_DOWN) {
+            bool up = character == (char)KEY_UP;
+            if (up ? command_history_position > 0u
+                   : command_history_position < command_history_count) {
                 call_syscall(SYS_SCROLL, 3u, 0, 0);
-                command_history_position++;
-                if (command_history_position < command_history_count) {
-                    index = replace_input_line(
-                        buffer,
-                        index,
-                        command_history[command_history_position]
-                    );
+                input_move_cursor(buffer, cursor, length);
+                if (up) {
+                    command_history_position--;
                 } else {
-                    index = replace_input_line(buffer, index, "");
+                    command_history_position++;
                 }
+                const char *replacement =
+                    command_history_position < command_history_count
+                        ? command_history[command_history_position]
+                        : "";
+                length = replace_input_line(buffer, length, replacement);
+                cursor = length;
                 output_flush();
             }
             continue;
@@ -961,36 +1178,45 @@ static void read_line(char *buffer) {
             call_syscall(SYS_SCROLL, 2u, 0, 0);
             continue;
         }
-        if (character == '\t') {
-            index = autocomplete(buffer, index);
-            continue;
-        }
-        if (character == '\n' || character == '\r') {
-            call_syscall(SYS_SCROLL, 3u, 0, 0);
+        call_syscall(SYS_SCROLL, 3u, 0, 0);
+        if (character == (char)KEY_LEFT) {
+            if (cursor > 0u) {
+                input_move_cursor(buffer, cursor, cursor - 1u);
+                cursor--;
+            }
+        } else if (character == (char)KEY_RIGHT) {
+            if (cursor < length) {
+                input_move_cursor(buffer, cursor, cursor + 1u);
+                cursor++;
+            }
+        } else if (character == (char)KEY_HOME) {
+            input_move_cursor(buffer, cursor, 0u);
+            cursor = 0u;
+        } else if (character == (char)KEY_END) {
+            input_move_cursor(buffer, cursor, length);
+            cursor = length;
+        } else if (character == '\t') {
+            input_move_cursor(buffer, cursor, length);
+            length = autocomplete(buffer, length);
+            cursor = length;
+        } else if (character == '\n' || character == '\r') {
+            input_move_cursor(buffer, cursor, length);
             print_text("\n");
             output_flush();
-            buffer[index] = '\0';
+            buffer[length] = '\0';
             return;
-        }
-        if (character == '\b') {
-            if (index > 0) {
-                call_syscall(SYS_SCROLL, 3u, 0, 0);
-                index--;
-                buffer[index] = '\0';
-                print_text("\b \b");
-                output_flush();
+        } else if (character == '\b') {
+            if (cursor > 0u) {
+                input_remove(buffer, &length, &cursor, cursor - 1u);
             }
-            continue;
+        } else if (character == (char)KEY_DELETE) {
+            if (cursor < length) {
+                input_remove(buffer, &length, &cursor, cursor);
+            }
+        } else if (character >= ' ' && character <= '~') {
+            input_insert(buffer, &length, &cursor, character);
         }
-        if (character >= ' ' && character <= '~' &&
-            index + 1u < MAX_INPUT_SIZE) {
-            call_syscall(SYS_SCROLL, 3u, 0, 0);
-            buffer[index] = character;
-            index++;
-            buffer[index] = '\0';
-            print_char_color(character, COLOR_WHITE);
-            output_flush();
-        }
+        output_flush();
     }
 }
 
@@ -1693,6 +1919,8 @@ static void print_help(void) {
     print_text_color("run a shell script\n", COLOR_DARK_GRAY);
     print_text_color("  time                    ", COLOR_WHITE);
     print_text_color("show current date and time\n", COLOR_DARK_GRAY);
+    print_text_color("  fetch / neofetch        ", COLOR_WHITE);
+    print_text_color("show the OSama logo and system info\n", COLOR_DARK_GRAY);
     print_text_color("  mouse                   ", COLOR_WHITE);
     print_text_color("show mouse position and buttons\n", COLOR_DARK_GRAY);
     print_text_color("  uptime                  ", COLOR_WHITE);
@@ -1723,6 +1951,10 @@ static void print_help(void) {
     print_text_color("Keys:\n", COLOR_GREEN);
     print_text_color("  Up / Down               ", COLOR_WHITE);
     print_text_color("recent commands\n", COLOR_DARK_GRAY);
+    print_text_color("  Left / Right, Home/End  ", COLOR_WHITE);
+    print_text_color("move in the line (or left-click it)\n", COLOR_DARK_GRAY);
+    print_text_color("  Backspace / Delete      ", COLOR_WHITE);
+    print_text_color("delete before / at the cursor\n", COLOR_DARK_GRAY);
     print_text_color("  PageUp / PageDown       ", COLOR_WHITE);
     print_text_color("scroll the screen (mouse wheel too)\n", COLOR_DARK_GRAY);
     print_text_color("  Ctrl+C                  ", COLOR_WHITE);
@@ -1829,6 +2061,9 @@ static void execute_command(char *argv[], uint32_t argc) {
         }
     } else if (text_equal(command, "exec") && argc >= 2) {
         command_exec(argc - 1u, &argv[1]);
+    } else if ((text_equal(command, "fetch") || text_equal(command, "neofetch")) &&
+               argc == 1) {
+        command_fetch();
     } else if (text_equal(command, "mouse") && argc == 1) {
         uint32_t state = sys_mouse_get();
         if ((state & 0x01000000u) == 0u) {
@@ -1950,7 +2185,7 @@ static void parse_and_execute(char *line) {
 int main(void) {
     path_env_init();
     path_load();
-    print_text_color("Welcome to OSama\n", COLOR_BLUE);
+    command_fetch();
     output_flush();
     char input_buffer[MAX_INPUT_SIZE];
     while (true) {

@@ -1533,6 +1533,18 @@ int8_t read(struct EXT2DriverRequest request)
     return SUCCESS;
 }
 
+void ext2_get_disk_usage(uint32_t *total_blocks, uint32_t *free_blocks)
+{
+    struct EXT2Superblock superblock;
+    read_superblock(&superblock);
+    if (total_blocks != NULL) {
+        *total_blocks = superblock.s_blocks_count;
+    }
+    if (free_blocks != NULL) {
+        *free_blocks = superblock.s_free_blocks_count;
+    }
+}
+
 int8_t read_at(struct EXT2DriverRequest request, uint32_t offset, uint32_t *bytes_read)
 {
     if (bytes_read == NULL) {
