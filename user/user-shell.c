@@ -12,6 +12,7 @@
 #define MAX_FIND_DEPTH 8u
 #define MAX_HISTORY_SIZE 16u
 #define AUTOCOMPLETE_MAX_CANDIDATES 24u
+#define MAX_SCRIPT_DEPTH 3u
 
 #define OUTPUT_BUFFER_SIZE 512u
 
@@ -50,6 +51,7 @@ static char pipe_buffer[512];
 static uint32_t pipe_pos = 0;
 static bool pipe_mode = false;
 static bool pipe_truncated = false;
+static uint32_t script_depth = 0;
 
 static char output_buffer[OUTPUT_BUFFER_SIZE];
 static uint8_t output_colors[OUTPUT_BUFFER_SIZE];
@@ -1217,10 +1219,43 @@ static void command_copy(const char *source, const char *destination) {
         return;
     }
 
+    /* If destination is an existing folder, copy into it with the same
+     * name; otherwise destination is the new file path. */
     uint32_t destination_parent;
     char destination_name[MAX_PATH_SIZE];
-    if (!resolve_file_path(destination, &destination_parent, destination_name) ||
-        !write_file(destination_parent, destination_name, file_buffer, size)) {
+    if (resolve_directory_path(destination, &destination_parent)) {
+        copy_text(destination_name, source_name, MAX_PATH_SIZE);
+    } else if (!resolve_file_path(destination, &destination_parent,
+                                  destination_name)) {
+        print_error("cp: cannot create destination\n");
+        return;
+    }
+
+    /* UNIX-like: an existing destination file is overwritten. */
+    uint32_t existing_inode;
+    uint8_t existing_type;
+    if (lookup_entry(destination_parent, destination_name,
+                     &existing_inode, &existing_type)) {
+        if (existing_type == EXT2_FT_DIR) {
+            print_error("cp: destination is a folder\n");
+            return;
+        }
+        if (destination_parent == source_parent &&
+            text_equal(destination_name, source_name)) {
+            print_error("cp: source and destination are the same file\n");
+            return;
+        }
+        struct EXT2DriverRequest request = {
+            .buf = NULL,
+            .name = destination_name,
+            .name_len = (uint8_t)text_length(destination_name),
+            .parent_inode = destination_parent,
+            .buffer_size = 0,
+            .is_directory = false,
+        };
+        call_syscall(SYS_DELETE, (uint32_t)&request, 0, 0);
+    }
+    if (!write_file(destination_parent, destination_name, file_buffer, size)) {
         print_error("cp: cannot create destination\n");
     }
 }
@@ -1451,12 +1486,19 @@ static void command_script(const char *path) {
     if (size == 0u) {
         return;
     }
+    /* Nested/recursive scripts use the single 4 KB user stack page, so
+     * limit the depth instead of overflowing it and crashing the shell. */
+    if (script_depth >= MAX_SCRIPT_DEPTH) {
+        print_error("sh: scripts nested too deep\n");
+        return;
+    }
 
     uint8_t *script_contents = (uint8_t *)sys_malloc(size);
     if (script_contents == NULL) {
         print_error("sh: cannot allocate script buffer\n");
         return;
     }
+    script_depth++;
     for (uint32_t i = 0; i < size; i++) {
         script_contents[i] = file_buffer[i];
     }
@@ -1484,6 +1526,7 @@ static void command_script(const char *path) {
         if (too_long) {
             print_error("sh: line exceeds shell input limit\n");
             sys_free(script_contents);
+            script_depth--;
             return;
         }
         line[length] = '\0';
@@ -1498,6 +1541,7 @@ static void command_script(const char *path) {
         }
     }
     sys_free(script_contents);
+    script_depth--;
 }
 
 static void print_help(void) {
