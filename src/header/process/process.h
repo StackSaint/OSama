@@ -9,7 +9,7 @@
 #include "header/filesystem/ext2.h"
 
 #define PROCESS_NAME_LENGTH_MAX      32
-#define PROCESS_PAGE_FRAME_COUNT_MAX 12
+#define PROCESS_PAGE_FRAME_COUNT_MAX 64
 #define PROCESS_COUNT_MAX            16
 #define PROCESS_ARG_MAX_COUNT        8
 #define PROCESS_ARG_MAX_LEN          64
