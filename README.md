@@ -1,4 +1,4 @@
-![Credit: 朧月](mascot.jpg)
+![Credit: 朧月](osama.jpg)
 
 # OSama
 
@@ -8,6 +8,7 @@
   - [Nama Kelompok \& Anggota](#nama-kelompok--anggota)
   - [Build dan Menjalankan OS](#build-dan-menjalankan-os)
   - [Fitur](#fitur)
+  - [Perintah Shell](#perintah-shell)
 
 ---
 
