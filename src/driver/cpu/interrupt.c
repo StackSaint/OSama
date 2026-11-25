@@ -406,7 +406,10 @@ void handle_syscall(struct InterruptFrame *frame) {
         }
         case SYS_EXIT: {
             int current_pid = scheduler_get_current_running_pid();
-            if (current_pid >= 0 &&
+            /* PID 0 is the initial shell; destroying it leaves no
+             * runnable process and the system hangs.  Refuse like
+             * SYS_KILL does. */
+            if (current_pid > 0 &&
                 process_destroy((uint32_t)current_pid)) {
                 scheduler_switch_to_next_process();
             }

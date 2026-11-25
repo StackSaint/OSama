@@ -1722,6 +1722,9 @@ static void execute_command(char *argv[], uint32_t argc) {
         print_error("exit: could not terminate process\n");
     } else if (text_equal(command, "export")) {
         command_export(argc, argv);
+    } else if (text_equal(command, "shell") ||
+               text_equal(command, "shell_elf")) {
+        print_error("shell: recursive shell invocation is not allowed\n");
     } else {
         char resolved[MAX_PATH_SIZE];
         if (search_path(command, resolved, sizeof(resolved)) == 0) {

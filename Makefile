@@ -29,11 +29,13 @@ LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
 run: all insert-shell insert-clock insert-echo insert-hello
 	@$(QEMU) \
+		-rtc base=utc \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 
 run-audio: all insert-shell insert-clock insert-echo insert-hello
 	@$(QEMU) \
+		-rtc base=utc \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
