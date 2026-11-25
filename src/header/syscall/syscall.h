@@ -31,6 +31,8 @@ struct EXT2DriverRequest;
 #define SYS_FREE           21
 #define SYS_PC_SPEAKER     22
 #define SYS_MOVE           23
+#define SYS_READ_AT        24
+#define SYS_FB_BLIT        25
 
 /* SYS_GET_KEY_STATUS return flags (also cleared once read) */
 #define SYS_KEY_STATUS_CTRL_C    0x01u
@@ -149,6 +151,32 @@ static inline void sys_free(void *ptr) {
  */
 static inline void sys_pc_speaker(uint32_t frequency_hz, uint32_t duration_ms) {
     system_call(SYS_PC_SPEAKER, frequency_hz, duration_ms, 0);
+}
+
+/**
+ * Read up to request->buffer_size bytes of a file, starting at `offset`.
+ *
+ * @param request    File to read (name, name_len, parent_inode) and destination
+ *                   buffer (buf, buffer_size).
+ * @param offset     Byte offset in the file.
+ * @param bytes_read Receives the number of bytes copied (0 at end of file).
+ * @return 0 on success, otherwise the same error codes as SYS_READ.
+ */
+static inline int32_t sys_read_at(
+    struct EXT2DriverRequest *request,
+    uint32_t offset,
+    uint32_t *bytes_read
+) {
+    return system_call(SYS_READ_AT, (uint32_t)request, offset, (uint32_t)bytes_read);
+}
+
+/**
+ * Copy `count` text cells to the screen starting at cell `start`
+ * (row * 80 + col). Each cell is a character in the low byte and a VGA color
+ * attribute in the high byte.
+ */
+static inline void sys_fb_blit(uint16_t start, const uint16_t *cells, uint16_t count) {
+    system_call(SYS_FB_BLIT, (uint32_t)cells, (uint32_t)start, (uint32_t)count);
 }
 
 #endif

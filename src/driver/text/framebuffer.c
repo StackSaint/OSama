@@ -51,3 +51,28 @@ void framebuffer_clear(void) {
 
     framebuffer_set_cursor(0, 0);
 }
+void framebuffer_hide_cursor(void) {
+    /* A position past the last cell (80 * 25) is never drawn. */
+    uint16_t position = FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT;
+
+    out(CURSOR_PORT_CMD, 0x0F);
+    out(CURSOR_PORT_DATA, (uint8_t) (position & 0xFF));
+
+    out(CURSOR_PORT_CMD, 0x0E);
+    out(CURSOR_PORT_DATA, (uint8_t) ((position >> 8) & 0xFF));
+}
+
+void framebuffer_blit(uint16_t start, const uint16_t *cells, uint16_t count) {
+    uint16_t limit = FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT;
+    if (cells == 0 || start >= limit) {
+        return;
+    }
+    if (count > limit - start) {
+        count = limit - start;
+    }
+
+    volatile uint16_t *video = (volatile uint16_t *) FRAMEBUFFER_MEMORY_OFFSET;
+    for (uint16_t i = 0; i < count; i++) {
+        video[start + i] = cells[i];
+    }
+}

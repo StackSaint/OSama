@@ -25,15 +25,15 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello inserter insert-shell insert-clock insert-echo insert-hello
+.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple inserter insert-shell insert-clock insert-echo insert-hello insert-badapple
 
-run: all insert-shell insert-clock insert-echo insert-hello
+run: all insert-shell insert-clock insert-echo insert-hello insert-badapple
 	@$(QEMU) \
 		-rtc base=utc \
 		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
 		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
 
-run-audio: all insert-shell insert-clock insert-echo insert-hello
+run-audio: all insert-shell insert-clock insert-echo insert-hello insert-badapple
 	@$(QEMU) \
 		-rtc base=utc \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
@@ -167,3 +167,22 @@ insert-echo: inserter user-echo $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 
 insert-hello: inserter user-hello $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER) && ./inserter hello 1 $(DISK_NAME).bin
+
+user-badapple:
+	@mkdir -p $(OUTPUT_FOLDER)
+	@$(ASM) $(AFLAGS) user/crt0.s -o $(OUTPUT_FOLDER)/user-crt0.o
+	@$(CC) $(CFLAGS) -fno-pie user/badapple.c -o $(OUTPUT_FOLDER)/user-badapple.o
+	@$(LIN) -T user/user-linker-exec.ld -melf_i386 --oformat=binary \
+		$(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-badapple.o \
+		-o $(OUTPUT_FOLDER)/badapple
+	@rm -f $(OUTPUT_FOLDER)/user-crt0.o $(OUTPUT_FOLDER)/user-badapple.o
+
+# Bad Apple!! player + video data. other/badapple.dat is made from the video
+# with tools/badapple-convert.py; it is skipped if the file is missing.
+insert-badapple: inserter user-badapple $(OUTPUT_FOLDER)/$(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER) && ./inserter badapple 1 $(DISK_NAME).bin
+	@if [ -f other/badapple.dat ]; then \
+		cd $(OUTPUT_FOLDER) && ./inserter ../other/badapple.dat 1 $(DISK_NAME).bin badapple.dat; \
+	else \
+		echo "other/badapple.dat not found, skipping video data"; \
+	fi

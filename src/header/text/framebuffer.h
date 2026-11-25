@@ -36,4 +36,18 @@ void framebuffer_write(
 void framebuffer_set_cursor(uint8_t row, uint8_t col);
 void framebuffer_clear(void);
 
+/**
+ * Sembunyikan cursor hardware (dipindah ke luar layar).
+ */
+void framebuffer_hide_cursor(void);
+
+/**
+ * Salin banyak sel sekaligus ke video memory.
+ *
+ * @param start indeks sel pertama (row * 80 + col).
+ * @param cells array sel; byte rendah = karakter, byte tinggi = atribut warna.
+ * @param count jumlah sel (dipotong jika melewati akhir layar).
+ */
+void framebuffer_blit(uint16_t start, const uint16_t *cells, uint16_t count);
+
 #endif

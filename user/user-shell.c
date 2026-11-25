@@ -773,7 +773,7 @@ static uint32_t autocomplete(char *buffer, uint32_t index) {
         "help", "clear", "ls", "cd", "mkdir", "rmdir", "rm",
         "cat", "cp", "mv", "find", "grep", "ps", "kill", "exec",
         "time", "uptime", "shutdown", "exit", "export",
-        "echo", "hello", "clock"
+        "echo", "hello", "clock", "badapple"
     };
     uint32_t candidate_count = 0;
     for (uint32_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
@@ -1425,8 +1425,34 @@ static void command_exec(uint32_t argc, char *argv[]) {
         print_error(")\n");
         return;
     }
-    uint32_t start_tick = (uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0);
-    while ((uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0) - start_tick < 50u) {
+    if (text_equal(name, "clock")) {
+        /* clock is a background program: give it a moment to draw, then
+         * return to the prompt while it keeps running. */
+        uint32_t start_tick = (uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0);
+        while ((uint32_t)call_syscall(SYS_GET_TIME, 0, 0, 0) - start_tick < 50u) {
+        }
+        return;
+    }
+
+    /* Every other program runs in the foreground: block until it exits.
+     * Ctrl+C terminates it (a program may also handle Ctrl+C itself). */
+    uint32_t pid;
+    while (find_pid_by_name(name, &pid)) {
+        if (((uint32_t)call_syscall(SYS_GET_KEY_STATUS, 0, 0, 0) &
+             SYS_KEY_STATUS_CTRL_C) != 0u) {
+            call_syscall(SYS_KILL, pid, 0, 0);
+            /* The program may have drawn straight to the screen: redraw the
+             * terminal and blank the status line. */
+            call_syscall(SYS_SCROLL, 3u, 0, 0);
+            for (uint8_t col = 0; col < 80u; col++) {
+                sys_fb_putchar(24u, col, ' ', COLOR_BLACK);
+            }
+            print_text("^C\n");
+            break;
+        }
+    }
+    /* Drop keys that were pressed for the program (e.g. Ctrl+C, q). */
+    while (call_syscall(SYS_GETKEY, 0, 0, 0) != 0) {
     }
 }
 
@@ -1601,13 +1627,15 @@ static void print_help(void) {
     print_text_color("print argc/argv and arguments\n", COLOR_DARK_GRAY);
     print_text_color("  clock                   ", COLOR_WHITE);
     print_text_color("background clock (stop: kill clock)\n", COLOR_DARK_GRAY);
+    print_text_color("  badapple [file]         ", COLOR_WHITE);
+    print_text_color("play Bad Apple!! (stop: Ctrl+C or q)\n", COLOR_DARK_GRAY);
     print_text_color("Keys:\n", COLOR_GREEN);
     print_text_color("  Up / Down               ", COLOR_WHITE);
     print_text_color("recent commands\n", COLOR_DARK_GRAY);
     print_text_color("  PageUp / PageDown       ", COLOR_WHITE);
     print_text_color("scroll the screen\n", COLOR_DARK_GRAY);
     print_text_color("  Ctrl+C                  ", COLOR_WHITE);
-    print_text_color("cancel the current line\n", COLOR_DARK_GRAY);
+    print_text_color("cancel the line / stop the running program\n", COLOR_DARK_GRAY);
     print_text_color("  Tab                     ", COLOR_WHITE);
     print_text_color("complete command or path\n", COLOR_DARK_GRAY);
 }

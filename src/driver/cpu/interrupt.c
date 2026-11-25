@@ -317,12 +317,38 @@ void handle_syscall(struct InterruptFrame *frame) {
             frame->cpu.general.eax = 0;
             break;
         case SYS_FB_SET_CURSOR:
-            framebuffer_set_cursor(
-                (uint8_t)frame->cpu.general.ebx,
-                (uint8_t)frame->cpu.general.ecx
+            /* A row past the bottom of the screen hides the cursor. */
+            if (frame->cpu.general.ebx >= FRAMEBUFFER_HEIGHT) {
+                framebuffer_hide_cursor();
+            } else {
+                framebuffer_set_cursor(
+                    (uint8_t)frame->cpu.general.ebx,
+                    (uint8_t)frame->cpu.general.ecx
+                );
+            }
+            frame->cpu.general.eax = 0;
+            break;
+        case SYS_FB_BLIT:
+            framebuffer_blit(
+                (uint16_t)frame->cpu.general.ecx,
+                (const uint16_t *)frame->cpu.general.ebx,
+                (uint16_t)frame->cpu.general.edx
             );
             frame->cpu.general.eax = 0;
             break;
+        case SYS_READ_AT: {
+            struct EXT2DriverRequest *request =
+                (struct EXT2DriverRequest *)frame->cpu.general.ebx;
+            uint32_t *bytes_read = (uint32_t *)frame->cpu.general.edx;
+            uint32_t copied = 0;
+            frame->cpu.general.eax = request != NULL
+                ? (uint32_t)(int32_t)read_at(*request, frame->cpu.general.ecx, &copied)
+                : (uint32_t)-1;
+            if (bytes_read != NULL) {
+                *bytes_read = copied;
+            }
+            break;
+        }
         case SYS_GETKEY: {
             char key = 0;
             get_keyboard_buffer(&key);

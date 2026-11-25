@@ -326,6 +326,17 @@ int8_t read_directory(struct EXT2DriverRequest *prequest);
 int8_t read(struct EXT2DriverRequest request);
 
 /**
+ * @brief Read part of a file, starting at a byte offset (used to stream large
+ *        files such as badapple.dat without loading them whole)
+ * @param request    name, name_len and parent_inode select the file; buf and
+ *                   buffer_size are the destination and the maximum byte count
+ * @param offset     first byte of the file to read
+ * @param bytes_read set to the number of bytes copied (0 at end of file)
+ * @return Error code: same as read(), except buffer_size is never "not enough"
+ */
+int8_t read_at(struct EXT2DriverRequest request, uint32_t offset, uint32_t *bytes_read);
+
+/**
  * Get the size of a regular file without reading its contents.
  */
 int8_t get_file_size(const struct EXT2DriverRequest *request, uint32_t *size);
