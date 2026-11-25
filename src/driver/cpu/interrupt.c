@@ -158,19 +158,6 @@ static void render_scroll_view(void) {
     );
 }
 
-/* Move the scroll view by `lines` (positive = up to older output). */
-static void scroll_terminal_lines(int32_t lines) {
-    while (lines > 0 && scroll_offset < scrollback_count) {
-        scroll_offset++;
-        lines--;
-    }
-    while (lines < 0 && scroll_offset > 0u) {
-        scroll_offset--;
-        lines++;
-    }
-    render_scroll_view();
-}
-
 static void framebuffer_scroll_up(void) {
     append_scrollback_row(0);
     uint8_t *video_memory = FRAMEBUFFER_MEMORY_OFFSET;
@@ -356,6 +343,9 @@ void handle_syscall(struct InterruptFrame *frame) {
                 (uint32_t)state.col;
             break;
         }
+        case SYS_MOUSE_WHEEL:
+            frame->cpu.general.eax = (uint32_t)mouse_take_wheel();
+            break;
         case SYS_GET_TEXT_CURSOR:
             frame->cpu.general.eax =
                 ((uint32_t)syscall_cursor_row << 8) | (uint32_t)syscall_cursor_col;
@@ -595,17 +585,13 @@ void main_interrupt_handler(struct InterruptFrame *frame) {
             keyboard_isr();
             pic_ack(IRQ_KEYBOARD);
             break;
-        case PIC2_OFFSET + (IRQ_MOUSE - 8): {
+        case PIC2_OFFSET + (IRQ_MOUSE - 8):
+            /* Wheel movement is only collected here; the shell applies it
+             * (SYS_MOUSE_WHEEL) while it waits for input, so the wheel never
+             * redraws the terminal over a running program. */
             mouse_isr();
-            int32_t wheel = mouse_take_wheel();
-            if (wheel != 0) {
-                mouse_cursor_hide();
-                scroll_terminal_lines(wheel);
-                mouse_cursor_show();
-            }
             pic_ack(IRQ_MOUSE);
             break;
-        }
         case 0x30:
             /* Keep the mouse pointer out of video memory while a syscall
              * draws, so it is never copied into the terminal buffers. */

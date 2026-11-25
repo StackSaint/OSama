@@ -440,8 +440,9 @@ static void path_load(void) {
     uint32_t parent_inode;
     char name[MAX_PATH_SIZE];
     uint32_t size;
+    /* >= leaves room for the terminating '\0' inside file_buffer. */
     if (!read_file("/path.env", &parent_inode, name, &size) || size == 0 ||
-        size > MAX_FILE_SIZE) {
+        size >= MAX_FILE_SIZE) {
         return;
     }
     file_buffer[size] = '\0';
@@ -1126,10 +1127,20 @@ static void read_line(char *buffer) {
     bool left_was_down = true;  /* ignore a button already held at the prompt */
     buffer[0] = '\0';
     command_history_position = command_history_count;
+    (void)sys_mouse_wheel();  /* drop wheel movement made while a program ran */
     while (true) {
         int32_t key = call_syscall(SYS_GETKEY, 0, 0, 0);
         char character = (char)key;
         if (character == '\0') {
+            /* Mouse wheel scrolls the terminal, one SYS_SCROLL per line. */
+            int32_t wheel = sys_mouse_wheel();
+            for (; wheel > 0; wheel--) {
+                call_syscall(SYS_SCROLL, 1u, 0, 0);
+            }
+            for (; wheel < 0; wheel++) {
+                call_syscall(SYS_SCROLL, 2u, 0, 0);
+            }
+
             uint32_t mouse = sys_mouse_get();
             bool left_down = ((mouse >> 16) & 0x01u) != 0u;  /* left button */
             if (left_down && !left_was_down) {
@@ -1139,6 +1150,9 @@ static void read_line(char *buffer) {
             continue;
         }
         if (character == (char)KEY_CTRL_C) {
+            /* Also clear the kernel's Ctrl+C flag, or the next foreground
+             * program would see this old Ctrl+C and be stopped at once. */
+            (void)call_syscall(SYS_GET_KEY_STATUS, 0, 0, 0);
             input_move_cursor(buffer, cursor, length);
             while (length > 0u) {
                 length--;
@@ -1724,6 +1738,8 @@ static void command_exec(uint32_t argc, char *argv[]) {
         .buffer_size = size,
         .is_directory = false,
     };
+    /* Forget any earlier Ctrl+C so it cannot stop the new program. */
+    (void)call_syscall(SYS_GET_KEY_STATUS, 0, 0, 0);
     int32_t result = call_syscall(
         SYS_EXEC,
         (uint32_t)&request,

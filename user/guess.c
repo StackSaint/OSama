@@ -47,6 +47,7 @@ static bool read_number(uint32_t *number) {
     while (true) {
         char key = sys_getkey();
         if (key == (char)KEY_CTRL_C) {
+            (void)sys_get_key_status();  /* clear the kernel's Ctrl+C flag */
             print_text("^C\n", COLOR_LIGHT_GRAY);
             return false;
         }

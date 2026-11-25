@@ -36,6 +36,7 @@ struct EXT2DriverRequest;
 #define SYS_MOUSE_GET      26
 #define SYS_SYSINFO        27
 #define SYS_GET_TEXT_CURSOR 28
+#define SYS_MOUSE_WHEEL    29
 
 /* Filled by SYS_SYSINFO */
 struct SystemInfo {
@@ -207,6 +208,14 @@ static inline uint32_t sys_mouse_get(void) {
  */
 static inline uint32_t sys_get_text_cursor(void) {
     return (uint32_t)system_call(SYS_GET_TEXT_CURSOR, 0, 0, 0);
+}
+
+/**
+ * Mouse wheel movement collected since the last call (then reset to 0),
+ * in lines: positive = scroll up to older output, negative = down.
+ */
+static inline int32_t sys_mouse_wheel(void) {
+    return system_call(SYS_MOUSE_WHEEL, 0, 0, 0);
 }
 
 /** Memory, disk and process usage (see struct SystemInfo). 0 on success. */
