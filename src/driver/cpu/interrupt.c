@@ -12,6 +12,7 @@
 #include "header/scheduler/scheduler.h"
 #include "header/driver/cmos.h"
 #include "header/driver/pc_speaker.h"
+#include "header/driver/mouse.h"
 
 struct TSSEntry _interrupt_tss_entry = {
     .ss0 = GDT_KERNEL_DATA_SEGMENT_SELECTOR,
@@ -155,6 +156,19 @@ static void render_scroll_view(void) {
         scroll_offset == 0u ? syscall_cursor_row : TERMINAL_HEIGHT - 1,
         scroll_offset == 0u ? syscall_cursor_col : 0
     );
+}
+
+/* Move the scroll view by `lines` (positive = up to older output). */
+static void scroll_terminal_lines(int32_t lines) {
+    while (lines > 0 && scroll_offset < scrollback_count) {
+        scroll_offset++;
+        lines--;
+    }
+    while (lines < 0 && scroll_offset > 0u) {
+        scroll_offset--;
+        lines++;
+    }
+    render_scroll_view();
 }
 
 static void framebuffer_scroll_up(void) {
@@ -328,6 +342,15 @@ void handle_syscall(struct InterruptFrame *frame) {
             }
             frame->cpu.general.eax = 0;
             break;
+        case SYS_MOUSE_GET: {
+            struct MouseState state = mouse_get_state();
+            frame->cpu.general.eax =
+                ((uint32_t)state.present << 24) |
+                ((uint32_t)state.buttons << 16) |
+                ((uint32_t)state.row << 8) |
+                (uint32_t)state.col;
+            break;
+        }
         case SYS_FB_BLIT:
             framebuffer_blit(
                 (uint16_t)frame->cpu.general.ecx,
@@ -544,8 +567,23 @@ void main_interrupt_handler(struct InterruptFrame *frame) {
             keyboard_isr();
             pic_ack(IRQ_KEYBOARD);
             break;
+        case PIC2_OFFSET + (IRQ_MOUSE - 8): {
+            mouse_isr();
+            int32_t wheel = mouse_take_wheel();
+            if (wheel != 0) {
+                mouse_cursor_hide();
+                scroll_terminal_lines(wheel);
+                mouse_cursor_show();
+            }
+            pic_ack(IRQ_MOUSE);
+            break;
+        }
         case 0x30:
+            /* Keep the mouse pointer out of video memory while a syscall
+             * draws, so it is never copied into the terminal buffers. */
+            mouse_cursor_hide();
             handle_syscall(frame);
+            mouse_cursor_show();
             break;
         default:
             break;

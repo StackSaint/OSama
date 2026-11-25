@@ -33,6 +33,7 @@ struct EXT2DriverRequest;
 #define SYS_MOVE           23
 #define SYS_READ_AT        24
 #define SYS_FB_BLIT        25
+#define SYS_MOUSE_GET      26
 
 /* SYS_GET_KEY_STATUS return flags (also cleared once read) */
 #define SYS_KEY_STATUS_CTRL_C    0x01u
@@ -177,6 +178,15 @@ static inline int32_t sys_read_at(
  */
 static inline void sys_fb_blit(uint16_t start, const uint16_t *cells, uint16_t count) {
     system_call(SYS_FB_BLIT, (uint32_t)cells, (uint32_t)start, (uint32_t)count);
+}
+
+/**
+ * Current mouse state, packed:
+ * bits 0-7 column, 8-15 row, 16-23 buttons (1 left, 2 right, 4 middle),
+ * bit 24 set when a PS/2 mouse was detected.
+ */
+static inline uint32_t sys_mouse_get(void) {
+    return (uint32_t)system_call(SYS_MOUSE_GET, 0, 0, 0);
 }
 
 #endif

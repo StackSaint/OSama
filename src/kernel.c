@@ -15,6 +15,7 @@
 #include "header/kernel-entrypoint.h"
 #include "header/cpu/portio.h"
 #include "header/driver/pc_speaker.h"
+#include "header/driver/mouse.h"
 
 static void framebuffer_write_text(
     uint8_t row,
@@ -237,6 +238,7 @@ void kernel_setup(void) {
     pic_remap();
     initialize_idt();
     activate_keyboard_interrupt();
+    mouse_initialize();
     scheduler_init();
     pit_initialize();
     pc_speaker_init();
