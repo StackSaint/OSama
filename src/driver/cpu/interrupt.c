@@ -199,6 +199,33 @@ static void framebuffer_write_char(char c, uint8_t color) {
     framebuffer_set_cursor(syscall_cursor_row, syscall_cursor_col);
 }
 
+#define RTC_WIB_OFFSET_HOURS 7u
+
+static uint8_t rtc_days_in_month(uint16_t year, uint8_t month) {
+    static const uint8_t dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+        return 29;
+    }
+    return dim[month - 1];
+}
+
+/* CMOS/RTC gives UTC; convert to WIB (UTC+7) for user programs. */
+static void rtc_apply_wib(struct RTCTime *t) {
+    t->hour += (uint8_t)RTC_WIB_OFFSET_HOURS;
+    if (t->hour >= 24) {
+        t->hour -= 24;
+        t->day++;
+        if (t->day > rtc_days_in_month(t->year, t->month)) {
+            t->day = 1;
+            t->month++;
+            if (t->month > 12) {
+                t->month = 1;
+                t->year++;
+            }
+        }
+    }
+}
+
 void handle_syscall(struct InterruptFrame *frame) {
     switch (frame->cpu.general.eax) {
         case SYS_READ: {
@@ -400,7 +427,8 @@ void handle_syscall(struct InterruptFrame *frame) {
         case SYS_KILL: {
             int32_t target_pid = (int32_t) frame->cpu.general.ebx;
             int current_pid = scheduler_get_current_running_pid();
-            if (target_pid >= 0 &&
+            /* PID 0 is the shell; killing it leaves no process and hangs. */
+            if (target_pid > 0 &&
                 target_pid < PROCESS_COUNT_MAX &&
                 process_destroy((uint32_t)target_pid)) {
                 frame->cpu.general.eax = 0;
@@ -429,6 +457,7 @@ void handle_syscall(struct InterruptFrame *frame) {
                 frame->cpu.general.eax = (uint32_t)-1;
             } else {
                 cmos_read_time(rtc_time);
+                rtc_apply_wib(rtc_time);
                 frame->cpu.general.eax = 0;
             }
             break;

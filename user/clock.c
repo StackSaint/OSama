@@ -9,7 +9,6 @@
  * bawah, kolom kanan (80 - 8 = 72 untuk "HH:MM:SS"). */
 #define FRAMEBUFFER_ROW   24u
 #define FRAMEBUFFER_COL   72u
-#define GMT_OFFSET_HOURS  8u
 #define CLOCK_UPDATE_MS   1000u
 
 static void print_number_at(uint8_t col, uint32_t number, uint8_t width, uint8_t color) {
@@ -31,31 +30,6 @@ static void print_number_at(uint8_t col, uint32_t number, uint8_t width, uint8_t
     }
 }
 
-static uint8_t days_in_month(uint16_t year, uint8_t month) {
-    static const uint8_t dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
-        return 29;
-    }
-    return dim[month - 1];
-}
-
-/* Ubah waktu UTC dari CMOS/RTC menjadi GMT+8 (WIB). */
-static void apply_gmt8(struct RTCTime *t) {
-    t->hour += (uint8_t)GMT_OFFSET_HOURS;
-    if (t->hour >= 24) {
-        t->hour -= 24;
-        t->day++;
-        if (t->day > days_in_month(t->year, t->month)) {
-            t->day = 1;
-            t->month++;
-            if (t->month > 12) {
-                t->month = 1;
-                t->year++;
-            }
-        }
-    }
-}
-
 static uint32_t sys_get_time_ms(void) {
     return (uint32_t)system_call(SYS_GET_TIME, 0, 0, 0);
 }
@@ -73,8 +47,8 @@ int main(void) {
      * detik berubah, tanpa mencetak ke baris terminal, sehingga shell tetap
      * dapat dipakai seperti biasa. Hentikan dengan `kill <pid>`. */
     while (true) {
+        /* SYS_GET_RTC already returns WIB (UTC+7). */
         if (sys_get_rtc(&now) == 0) {
-            apply_gmt8(&now);
             if (now.second != last_second) {
                 last_second = now.second;
                 uint8_t col = FRAMEBUFFER_COL;

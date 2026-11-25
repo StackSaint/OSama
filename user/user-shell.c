@@ -47,6 +47,7 @@ static uint32_t command_history_position = 0;
 static char pipe_buffer[512];
 static uint32_t pipe_pos = 0;
 static bool pipe_mode = false;
+static bool pipe_truncated = false;
 
 static char output_buffer[OUTPUT_BUFFER_SIZE];
 static uint8_t output_colors[OUTPUT_BUFFER_SIZE];
@@ -429,6 +430,8 @@ static void print_char_color(char character, uint8_t color) {
     if (pipe_mode) {
         if (pipe_pos < sizeof(pipe_buffer) - 1u) {
             pipe_buffer[pipe_pos++] = character;
+        } else {
+            pipe_truncated = true;
         }
         return;
     }
@@ -975,11 +978,29 @@ static void command_copy(const char *source, const char *destination) {
 
 static void command_move(const char *source, const char *destination) {
     uint32_t source_parent;
+    uint32_t source_inode;
+    uint8_t source_type;
     char source_name[MAX_PATH_SIZE];
     if (!resolve_file_path(source, &source_parent, source_name) ||
-        !lookup_entry(source_parent, source_name, NULL, NULL)) {
+        !lookup_entry(source_parent, source_name, &source_inode, &source_type)) {
         print_error("mv: source not found\n");
         return;
+    }
+
+    /* Is the current directory the moved folder or inside it? Then the
+     * prompt path becomes stale, so go back to / after the move. */
+    bool inside_moved = false;
+    if (source_type == EXT2_FT_DIR) {
+        uint32_t walk = current_directory;
+        for (uint32_t depth = 0; depth < 64u; depth++) {
+            if (walk == source_inode) {
+                inside_moved = true;
+                break;
+            }
+            if (walk == 1u || !lookup_entry(walk, "..", &walk, NULL)) {
+                break;
+            }
+        }
     }
 
     /* If destination is an existing folder, move the source into it with
@@ -1013,6 +1034,9 @@ static void command_move(const char *source, const char *destination) {
     if (call_syscall(SYS_MOVE, (uint32_t)&source_request,
                      (uint32_t)&destination_request, 0) != 0) {
         print_error("mv: failed (destination exists or folder into itself)\n");
+    } else if (inside_moved) {
+        current_directory = 1u;
+        copy_text(current_path, "/", MAX_PATH_SIZE);
     }
 }
 
@@ -1284,6 +1308,10 @@ static void execute_command(char *argv[], uint32_t argc) {
         );
         if (count > 0) {
             print_text_color(process_buffer, COLOR_GREEN);
+            if (text_length(process_buffer) >= sizeof(process_buffer) - 1u) {
+                print_text_color("warning: find output cut (too many results)\n",
+                                 COLOR_YELLOW);
+            }
         } else {
             print_error("find: no matching files in index\n");
         }
@@ -1298,6 +1326,9 @@ static void execute_command(char *argv[], uint32_t argc) {
         if (call_syscall(SYS_PS, (uint32_t)process_buffer,
                          sizeof(process_buffer), 0) == 0) {
             print_text_color(process_buffer, COLOR_LIGHT_GRAY);
+            if (text_length(process_buffer) >= sizeof(process_buffer) - 1u) {
+                print_text_color("warning: ps output cut\n", COLOR_YELLOW);
+            }
         }
     } else if (text_equal(command, "kill") && argc == 2) {
         uint32_t pid;
@@ -1398,12 +1429,17 @@ static void parse_and_execute(char *line) {
         if (!is_last) {
             pipe_mode = true;
             pipe_pos = 0;
+            pipe_truncated = false;
         }
 
         execute_command(args, argc);
 
         if (!is_last) {
             pipe_mode = false;
+            if (pipe_truncated) {
+                print_text_color("warning: pipe output cut at 511 bytes\n",
+                                 COLOR_YELLOW);
+            }
         }
     }
 }

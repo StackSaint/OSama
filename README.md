@@ -1,9 +1,9 @@
 ![Credit: 朧月](mascot.jpg)
 
-# Kelompok OSama
+# OSama
 
 ## Daftar Isi
-- [Kelompok OSama](#kelompok-osama)
+- [OSama](#osama)
   - [Daftar Isi](#daftar-isi)
   - [Nama Kelompok \& Anggota](#nama-kelompok--anggota)
   - [Build dan Menjalankan OS](#build-dan-menjalankan-os)
