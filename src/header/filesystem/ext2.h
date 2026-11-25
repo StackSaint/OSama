@@ -345,6 +345,14 @@ int8_t write(struct EXT2DriverRequest *request);
  */
 int8_t delete(struct EXT2DriverRequest request);
 
+/**
+ * @brief EXT2 move, move/rename a file or folder (folder contents included)
+ * @param source      parent_inode + name of the existing entry
+ * @param destination parent_inode + new name (must not exist yet)
+ * @return Error code: 0 success - 1 not found or destination exists - 2 invalid destination parent - 3 invalid source parent - -1 unknown (e.g. folder into itself)
+ */
+int8_t move(struct EXT2DriverRequest source, struct EXT2DriverRequest destination);
+
 /* =============================== MEMORY ==========================================*/
 
 /**

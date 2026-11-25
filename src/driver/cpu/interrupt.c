@@ -262,6 +262,16 @@ void handle_syscall(struct InterruptFrame *frame) {
                 : (uint32_t)-1;
             break;
         }
+        case SYS_MOVE: {
+            struct EXT2DriverRequest *source =
+                (struct EXT2DriverRequest *)frame->cpu.general.ebx;
+            struct EXT2DriverRequest *destination =
+                (struct EXT2DriverRequest *)frame->cpu.general.ecx;
+            frame->cpu.general.eax = source != NULL && destination != NULL
+                ? (uint32_t)(int32_t)move(*source, *destination)
+                : (uint32_t)-1;
+            break;
+        }
         case SYS_PUTCHAR:
             framebuffer_write_char(
                 (char)frame->cpu.general.ebx,

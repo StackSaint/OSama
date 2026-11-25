@@ -975,22 +975,26 @@ static void command_copy(const char *source, const char *destination) {
 
 static void command_move(const char *source, const char *destination) {
     uint32_t source_parent;
-    uint32_t size;
     char source_name[MAX_PATH_SIZE];
-    if (!read_file(source, &source_parent, source_name, &size)) {
-        print_error("mv: cannot read source (files only, maximum 8192 bytes)\n");
+    if (!resolve_file_path(source, &source_parent, source_name) ||
+        !lookup_entry(source_parent, source_name, NULL, NULL)) {
+        print_error("mv: source not found\n");
         return;
     }
 
+    /* If destination is an existing folder, move the source into it with
+     * the same name; otherwise destination is the new path/name. */
     uint32_t destination_parent;
     char destination_name[MAX_PATH_SIZE];
-    if (!resolve_file_path(destination, &destination_parent, destination_name) ||
-        !write_file(destination_parent, destination_name, file_buffer, size)) {
-        print_error("mv: cannot create destination\n");
+    if (resolve_directory_path(destination, &destination_parent)) {
+        copy_text(destination_name, source_name, MAX_PATH_SIZE);
+    } else if (!resolve_file_path(destination, &destination_parent,
+                                  destination_name)) {
+        print_error("mv: invalid destination\n");
         return;
     }
 
-    struct EXT2DriverRequest request = {
+    struct EXT2DriverRequest source_request = {
         .buf = NULL,
         .name = source_name,
         .name_len = (uint8_t)text_length(source_name),
@@ -998,8 +1002,17 @@ static void command_move(const char *source, const char *destination) {
         .buffer_size = 0,
         .is_directory = false,
     };
-    if (call_syscall(SYS_DELETE, (uint32_t)&request, 0, 0) != 0) {
-        print_error("mv: destination created but source could not be deleted\n");
+    struct EXT2DriverRequest destination_request = {
+        .buf = NULL,
+        .name = destination_name,
+        .name_len = (uint8_t)text_length(destination_name),
+        .parent_inode = destination_parent,
+        .buffer_size = 0,
+        .is_directory = false,
+    };
+    if (call_syscall(SYS_MOVE, (uint32_t)&source_request,
+                     (uint32_t)&destination_request, 0) != 0) {
+        print_error("mv: failed (destination exists or folder into itself)\n");
     }
 }
 
@@ -1173,13 +1186,13 @@ static void print_help(void) {
     print_text_color("  cp source destination   ", COLOR_WHITE);
     print_text_color("copy a file\n", COLOR_DARK_GRAY);
     print_text_color("  mv source destination   ", COLOR_WHITE);
-    print_text_color("move a file\n", COLOR_DARK_GRAY);
+    print_text_color("move/rename a file or folder\n", COLOR_DARK_GRAY);
     print_text_color("  rm file                 ", COLOR_WHITE);
     print_text_color("remove a file\n", COLOR_DARK_GRAY);
     print_text_color("  find [path] [pattern]   ", COLOR_WHITE);
     print_text_color("search directory tree\n", COLOR_DARK_GRAY);
-    print_text_color("  grep pattern file       ", COLOR_WHITE);
-    print_text_color("print matching lines\n", COLOR_DARK_GRAY);
+    print_text_color("  grep pattern [file]     ", COLOR_WHITE);
+    print_text_color("print matching lines (no file: piped input)\n", COLOR_DARK_GRAY);
     print_text_color("  ps                      ", COLOR_WHITE);
     print_text_color("list processes\n", COLOR_DARK_GRAY);
     print_text_color("  kill pid|name           ", COLOR_WHITE);
@@ -1196,6 +1209,24 @@ static void print_help(void) {
     print_text_color("exit this process\n", COLOR_DARK_GRAY);
     print_text_color("  export [add|remove] dir ", COLOR_WHITE);
     print_text_color("manage PATH directories\n", COLOR_DARK_GRAY);
+    print_text_color("  name [args...]          ", COLOR_WHITE);
+    print_text_color("run a program found in PATH\n", COLOR_DARK_GRAY);
+    print_text_color("  cmd1 | cmd2             ", COLOR_WHITE);
+    print_text_color("pipe output, e.g. ls | grep sh\n", COLOR_DARK_GRAY);
+    print_text_color("Programs:\n", COLOR_GREEN);
+    print_text_color("  hello                   ", COLOR_WHITE);
+    print_text_color("print Hello World!\n", COLOR_DARK_GRAY);
+    print_text_color("  echo [args...]          ", COLOR_WHITE);
+    print_text_color("print argc/argv and arguments\n", COLOR_DARK_GRAY);
+    print_text_color("  clock                   ", COLOR_WHITE);
+    print_text_color("background clock (stop: kill clock)\n", COLOR_DARK_GRAY);
+    print_text_color("Keys:\n", COLOR_GREEN);
+    print_text_color("  Up / Down               ", COLOR_WHITE);
+    print_text_color("recent commands\n", COLOR_DARK_GRAY);
+    print_text_color("  PageUp / PageDown       ", COLOR_WHITE);
+    print_text_color("scroll the screen\n", COLOR_DARK_GRAY);
+    print_text_color("  Ctrl+C                  ", COLOR_WHITE);
+    print_text_color("cancel the current line\n", COLOR_DARK_GRAY);
 }
 
 static void execute_command(char *argv[], uint32_t argc) {

@@ -30,6 +30,7 @@ struct EXT2DriverRequest;
 #define SYS_MALLOC         20
 #define SYS_FREE           21
 #define SYS_PC_SPEAKER     22
+#define SYS_MOVE           23
 
 /* SYS_GET_KEY_STATUS return flags (also cleared once read) */
 #define SYS_KEY_STATUS_CTRL_C    0x01u

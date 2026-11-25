@@ -1663,3 +1663,107 @@ int8_t delete(struct EXT2DriverRequest request)
     );
     return SUCCESS;
 }
+
+/* Return the inode stored in the ".." entry of a directory, or 0 on error. */
+static uint32_t get_directory_parent(uint32_t dir_inode)
+{
+    struct EXT2Inode node;
+    if (!read_inode(dir_inode, &node) ||
+        (node.i_mode & EXT2_MODE_MASK) != EXT2_S_IFDIR ||
+        node.i_block[0] == 0) {
+        return 0;
+    }
+    struct BlockBuffer buffer;
+    read_blocks(&buffer, node.i_block[0], 1);
+    struct EXT2DirectoryEntry *dot = get_directory_entry(buffer.buf, 0);
+    if (dot->rec_len < sizeof(*dot) || dot->rec_len >= BLOCK_SIZE) {
+        return 0;
+    }
+    return get_directory_entry(buffer.buf, dot->rec_len)->inode;
+}
+
+int8_t move(struct EXT2DriverRequest source, struct EXT2DriverRequest destination)
+{
+    if (source.name == NULL || source.name_len == 0 ||
+        destination.name == NULL || destination.name_len == 0 ||
+        (source.name_len == 1 && source.name[0] == '.') ||
+        (source.name_len == 2 && source.name[0] == '.' && source.name[1] == '.')) {
+        return ERR_UNKNOWN;
+    }
+
+    struct EXT2Inode source_parent;
+    struct EXT2FoundEntry found;
+    if (!read_inode(source.parent_inode, &source_parent) ||
+        (source_parent.i_mode & EXT2_MODE_MASK) != EXT2_S_IFDIR) {
+        return ERR_INVALID_PARENT_DELETE;
+    }
+    if (!find_directory_entry(&source_parent, source.name, source.name_len, &found)) {
+        return ERR_NOT_FOUND_DELETE;
+    }
+
+    struct EXT2Inode destination_parent;
+    struct EXT2FoundEntry existing;
+    if (!read_inode(destination.parent_inode, &destination_parent) ||
+        (destination_parent.i_mode & EXT2_MODE_MASK) != EXT2_S_IFDIR) {
+        return ERR_INVALID_PARENT_WRITE;
+    }
+    if (find_directory_entry(&destination_parent, destination.name,
+                             destination.name_len, &existing)) {
+        return ERR_ALREADY_EXISTS;
+    }
+
+    struct EXT2Inode target;
+    if (!read_inode(found.inode, &target)) {
+        return ERR_UNKNOWN;
+    }
+    bool target_is_directory = (target.i_mode & EXT2_MODE_MASK) == EXT2_S_IFDIR;
+
+    /* A folder cannot be moved into itself or into one of its descendants. */
+    if (target_is_directory) {
+        uint32_t ancestor = destination.parent_inode;
+        for (uint32_t depth = 0; depth < 64u && ancestor != 0; depth++) {
+            if (ancestor == found.inode) {
+                return ERR_UNKNOWN;
+            }
+            if (ancestor == 1u) {
+                break;
+            }
+            ancestor = get_directory_parent(ancestor);
+        }
+    }
+
+    /* Link the inode under its new name first, then unlink the old entry. */
+    if (!insert_directory_entry(&destination_parent,
+                                destination.parent_inode,
+                                found.inode,
+                                destination.name,
+                                destination.name_len,
+                                target_is_directory ? EXT2_FT_DIR : EXT2_FT_REG_FILE)) {
+        return ERR_UNKNOWN;
+    }
+
+    /* Re-read: the insert may have changed the source parent's blocks. */
+    if (!read_inode(source.parent_inode, &source_parent) ||
+        !find_directory_entry(&source_parent, source.name, source.name_len, &found)) {
+        return ERR_UNKNOWN;
+    }
+    struct BlockBuffer parent_buffer;
+    read_blocks(&parent_buffer, found.block, 1);
+    get_directory_entry(parent_buffer.buf, found.offset)->inode = 0;
+    write_blocks(&parent_buffer, found.block, 1);
+
+    /* Point ".." of a moved folder to its new parent. */
+    if (target_is_directory && source.parent_inode != destination.parent_inode) {
+        struct BlockBuffer dir_buffer;
+        read_blocks(&dir_buffer, target.i_block[0], 1);
+        struct EXT2DirectoryEntry *dot = get_directory_entry(dir_buffer.buf, 0);
+        get_directory_entry(dir_buffer.buf, dot->rec_len)->inode = destination.parent_inode;
+        write_blocks(&dir_buffer, target.i_block[0], 1);
+    }
+
+    read_superblock(&_ext2_superblock);
+    read_bgd_table(&_ext2_bgd_table);
+    /* Paths of everything below a moved folder change, so rebuild the index. */
+    ext2_index_rebuild();
+    return SUCCESS;
+}
