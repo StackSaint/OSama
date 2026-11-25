@@ -25,15 +25,10 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -DDISK_DRIVER_SEL
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-.PHONY: run run-audio all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple user-guess inserter insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
+.PHONY: run all build disk clean kernel iso user-shell user-clock user-echo user-hello user-badapple user-guess inserter insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 
+# PC speaker sound goes to PulseAudio (WSLg / Linux desktop).
 run: all insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
-	@$(QEMU) \
-		-rtc base=utc \
-		-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso \
-		-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk
-
-run-audio: all insert-shell insert-clock insert-echo insert-hello insert-badapple insert-guess
 	@$(QEMU) \
 		-rtc base=utc \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk \
