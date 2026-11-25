@@ -35,10 +35,14 @@
 
 static uint32_t current_directory = 1u;
 static char current_path[MAX_PATH_SIZE] = "/";
-/* PATH is stored in a heap-allocated, growable buffer (dynamic array) instead
- * of a fixed-size static array, so it can grow without a static limit. */
-static char *path_env = NULL;
-static uint32_t path_env_len = 0;
+/* PATH is a dynamic array on the process heap: path_dirs points to a
+ * heap block of path_capacity pointers, the first path_count of them point to
+ * heap-allocated directory strings. The array doubles when it is full and
+ * halves when it becomes mostly empty (see path_reserve / path_remove_dir). */
+#define PATH_INITIAL_CAPACITY 2u
+static char **path_dirs = NULL;
+static uint32_t path_count = 0;
+static uint32_t path_capacity = 0;
 static uint8_t directory_buffer[MAX_DIRECTORY_SIZE];
 static uint8_t file_buffer[MAX_FILE_SIZE];
 static char process_buffer[1024];
@@ -77,6 +81,7 @@ static bool copy_text(char *destination, const char *source,
 static void print_text_color(const char *text, uint8_t color);
 static void print_char(char character);
 static void print_error(const char *text);
+static void print_number_color(uint32_t number, uint8_t color);
 static bool resolve_file_path(const char *path,
                               uint32_t *parent_inode,
                               char *name);
@@ -101,31 +106,129 @@ static int shell_read_directory(uint32_t inode, uint8_t *buffer);
 static bool resolve_directory_path(const char *path, uint32_t *inode);
 static void parse_and_execute(char *line);
 
-/* Replace the heap-backed PATH buffer with a copy of `value`. Frees the old
- * buffer and updates path_env_len. Returns false if allocation fails (old
- * buffer is left untouched in that case). */
-static bool path_env_set(const char *value) {
-    uint32_t len = text_length(value);
-    char *fresh = (char *)sys_malloc(len + 1u);
-    if (fresh == NULL) {
+static char *heap_copy_text(const char *text, uint32_t length) {
+    char *copy = (char *)sys_malloc(length + 1u);
+    if (copy == NULL) {
+        return NULL;
+    }
+    for (uint32_t i = 0; i < length; i++) {
+        copy[i] = text[i];
+    }
+    copy[length] = '\0';
+    return copy;
+}
+
+/* Move the pointer array to a new heap block of `capacity` entries. */
+static bool path_resize(uint32_t capacity) {
+    char **grown = (char **)sys_malloc(capacity * (uint32_t)sizeof(char *));
+    if (grown == NULL) {
         return false;
     }
-    for (uint32_t i = 0; i < len; i++) {
-        fresh[i] = value[i];
+    for (uint32_t i = 0; i < path_count; i++) {
+        grown[i] = path_dirs[i];
     }
-    fresh[len] = '\0';
-    if (path_env != NULL) {
-        sys_free(path_env);
+    if (path_dirs != NULL) {
+        sys_free(path_dirs);
     }
-    path_env = fresh;
-    path_env_len = len;
+    path_dirs = grown;
+    path_capacity = capacity;
     return true;
+}
+
+/* Make room for at least `needed` entries, doubling the capacity. */
+static bool path_reserve(uint32_t needed) {
+    if (needed <= path_capacity) {
+        return true;
+    }
+    uint32_t capacity = path_capacity == 0u ? PATH_INITIAL_CAPACITY : path_capacity;
+    while (capacity < needed) {
+        capacity *= 2u;
+    }
+    return path_resize(capacity);
+}
+
+static bool path_append_dir(const char *dir, uint32_t length) {
+    if (length == 0u || !path_reserve(path_count + 1u)) {
+        return false;
+    }
+    char *copy = heap_copy_text(dir, length);
+    if (copy == NULL) {
+        return false;
+    }
+    path_dirs[path_count++] = copy;
+    return true;
+}
+
+static bool path_remove_dir(const char *dir) {
+    for (uint32_t i = 0; i < path_count; i++) {
+        if (!text_equal(path_dirs[i], dir)) {
+            continue;
+        }
+        sys_free(path_dirs[i]);
+        for (uint32_t j = i + 1u; j < path_count; j++) {
+            path_dirs[j - 1u] = path_dirs[j];
+        }
+        path_count--;
+        /* Shrink when only a quarter of the slots are used. */
+        if (path_capacity > PATH_INITIAL_CAPACITY &&
+            path_count <= path_capacity / 4u) {
+            (void)path_resize(path_capacity / 2u);
+        }
+        return true;
+    }
+    return false;
+}
+
+static void path_clear(void) {
+    for (uint32_t i = 0; i < path_count; i++) {
+        sys_free(path_dirs[i]);
+    }
+    path_count = 0;
+}
+
+/* Replace PATH with the directories of a "dir1:dir2:..." string. */
+static void path_set_from_text(const char *value) {
+    path_clear();
+    const char *p = value;
+    while (*p != '\0') {
+        const char *start = p;
+        while (*p != '\0' && *p != ':' && *p != '\n' && *p != '\r') {
+            p++;
+        }
+        (void)path_append_dir(start, (uint32_t)(p - start));
+        if (*p != '\0') {
+            p++;
+        }
+    }
+}
+
+/* Length of PATH written as "dir1:dir2:..." (without the terminator). */
+static uint32_t path_text_length(void) {
+    uint32_t length = 0;
+    for (uint32_t i = 0; i < path_count; i++) {
+        length += text_length(path_dirs[i]) + (i == 0u ? 0u : 1u);
+    }
+    return length;
+}
+
+/* Write PATH as "dir1:dir2:..." into `out` (needs path_text_length() + 1). */
+static void path_join(char *out) {
+    uint32_t pos = 0;
+    for (uint32_t i = 0; i < path_count; i++) {
+        if (i != 0u) {
+            out[pos++] = ':';
+        }
+        for (const char *c = path_dirs[i]; *c != '\0'; c++) {
+            out[pos++] = *c;
+        }
+    }
+    out[pos] = '\0';
 }
 
 /* Ensure PATH has a default value before path_load() runs. */
 static void path_env_init(void) {
-    if (path_env == NULL) {
-        (void)path_env_set("/bin:/");
+    if (path_count == 0u) {
+        path_set_from_text("/bin:/");
     }
 }
 
@@ -192,22 +295,8 @@ static void update_current_path(const char *path) {
 }
 
 static bool path_contains_dir(const char *dir) {
-    uint32_t dir_len = text_length(dir);
-    if (dir_len == 0) {
-        return false;
-    }
-    const char *p = path_env;
-    while (*p != '\0') {
-        uint32_t start = 0;
-        char comp[MAX_PATH_SIZE];
-        while (*p != '\0' && *p != ':' && start + 1u < MAX_PATH_SIZE) {
-            comp[start++] = *p++;
-        }
-        comp[start] = '\0';
-        if (*p == ':') {
-            p++;
-        }
-        if (text_equal(comp, dir)) {
+    for (uint32_t i = 0; i < path_count; i++) {
+        if (text_equal(path_dirs[i], dir)) {
             return true;
         }
     }
@@ -216,18 +305,10 @@ static bool path_contains_dir(const char *dir) {
 
 static int32_t search_path(const char *cmd, char *out_path,
                            uint32_t out_size) {
-    const char *p = path_env;
-    while (*p != '\0') {
-        uint32_t dir_len = 0;
-        char dir[MAX_PATH_SIZE];
-        while (*p != '\0' && *p != ':' && dir_len + 1u < MAX_PATH_SIZE) {
-            dir[dir_len++] = *p++;
-        }
-        dir[dir_len] = '\0';
-        if (*p == ':') {
-            p++;
-        }
-
+    uint32_t cmd_len = text_length(cmd);
+    for (uint32_t d = 0; d < path_count; d++) {
+        const char *dir = path_dirs[d];
+        uint32_t dir_len = text_length(dir);
         uint32_t total = 0;
         for (uint32_t i = 0; i < dir_len && total + 1u < out_size; i++) {
             out_path[total++] = dir[i];
@@ -235,7 +316,6 @@ static int32_t search_path(const char *cmd, char *out_path,
         if (dir_len > 0 && total + 1u < out_size && dir[dir_len - 1] != '/') {
             out_path[total++] = '/';
         }
-        uint32_t cmd_len = text_length(cmd);
         for (uint32_t i = 0; i < cmd_len && total + 1u < out_size; i++) {
             out_path[total++] = cmd[i];
         }
@@ -252,79 +332,75 @@ static int32_t search_path(const char *cmd, char *out_path,
     return -1;
 }
 
+static void print_hex_color(uint32_t value, uint8_t color) {
+    char text[11];
+    text[0] = '0';
+    text[1] = 'x';
+    for (uint32_t i = 0; i < 8u; i++) {
+        uint32_t nibble = (value >> (28u - 4u * i)) & 0xFu;
+        text[2u + i] = (char)(nibble < 10u ? '0' + nibble : 'A' + nibble - 10u);
+    }
+    text[10] = '\0';
+    print_text_color(text, color);
+}
+
+/* Show the PATH dynamic array as it is laid out on the heap. */
+static void path_dump(void) {
+    print_text_color("PATH dynamic array (heap)\n", COLOR_GREEN);
+    print_text_color("  array    = ", COLOR_DARK_GRAY);
+    print_hex_color((uint32_t)path_dirs, COLOR_WHITE);
+    print_text_color("\n  count    = ", COLOR_DARK_GRAY);
+    print_number_color(path_count, COLOR_WHITE);
+    print_text_color("\n  capacity = ", COLOR_DARK_GRAY);
+    print_number_color(path_capacity, COLOR_WHITE);
+    print_char('\n');
+    for (uint32_t i = 0; i < path_capacity; i++) {
+        print_text_color("  [", COLOR_DARK_GRAY);
+        print_number_color(i, COLOR_LIGHT_GRAY);
+        print_text_color("] ", COLOR_DARK_GRAY);
+        if (i >= path_count) {
+            print_text_color("(free slot)\n", COLOR_DARK_GRAY);
+            continue;
+        }
+        print_hex_color((uint32_t)path_dirs[i], COLOR_LIGHT_CYAN);
+        print_text_color(" \"", COLOR_DARK_GRAY);
+        print_text_color(path_dirs[i], COLOR_WHITE);
+        print_text_color("\" len ", COLOR_DARK_GRAY);
+        print_number_color(text_length(path_dirs[i]), COLOR_LIGHT_GRAY);
+        print_char('\n');
+    }
+}
+
 static void command_export(uint32_t argc, char *argv[]) {
     if (argc == 1) {
         print_text_color("PATH=", COLOR_WHITE);
-        print_text_color(path_env, COLOR_LIGHT_GRAY);
+        for (uint32_t i = 0; i < path_count; i++) {
+            if (i != 0u) {
+                print_text_color(":", COLOR_LIGHT_GRAY);
+            }
+            print_text_color(path_dirs[i], COLOR_LIGHT_GRAY);
+        }
         print_char('\n');
         return;
     }
-    if (argc == 3 && text_equal(argv[1], "add")) {
+    if (argc == 2 && text_equal(argv[1], "dump")) {
+        path_dump();
+    } else if (argc == 3 && text_equal(argv[1], "add")) {
         if (path_contains_dir(argv[2])) {
             print_error("export: directory already in PATH\n");
-            return;
-        }
-        uint32_t len = text_length(path_env);
-        uint32_t dir_len = text_length(argv[2]);
-        char *new_path = (char *)sys_malloc(len + dir_len + 2u);
-        if (new_path == NULL) {
+        } else if (!path_append_dir(argv[2], text_length(argv[2]))) {
             print_error("export: allocation failed\n");
-            return;
-        }
-        uint32_t nlen = 0;
-        for (uint32_t i = 0; i < len; i++) {
-            new_path[nlen++] = path_env[i];
-        }
-        if (nlen > 0 && new_path[nlen - 1] != ':') {
-            new_path[nlen++] = ':';
-        }
-        for (uint32_t i = 0; i < dir_len; i++) {
-            new_path[nlen++] = argv[2][i];
-        }
-        new_path[nlen] = '\0';
-        bool ok = path_env_set(new_path);
-        sys_free(new_path);
-        if (ok) {
-            path_save();
         } else {
-            print_error("export: allocation failed\n");
+            path_save();
         }
     } else if (argc == 3 && text_equal(argv[1], "remove")) {
-        char new_path[MAX_PATH_SIZE];
-        uint32_t nlen = 0;
-        const char *p = path_env;
-        bool found = false;
-        while (*p != '\0') {
-            uint32_t start = 0;
-            char comp[MAX_PATH_SIZE];
-            while (*p != '\0' && *p != ':' && start + 1u < MAX_PATH_SIZE) {
-                comp[start++] = *p++;
-            }
-            comp[start] = '\0';
-            if (*p == ':') {
-                p++;
-            }
-            if (text_equal(comp, argv[2])) {
-                found = true;
-                continue;
-            }
-            if (nlen > 0 && nlen + 1u < MAX_PATH_SIZE) {
-                new_path[nlen++] = ':';
-            }
-            for (uint32_t i = 0; comp[i] != '\0' && nlen + 1u < MAX_PATH_SIZE;
-                 i++) {
-                new_path[nlen++] = comp[i];
-            }
-        }
-        new_path[nlen] = '\0';
-        if (found) {
-            (void)path_env_set(new_path);
+        if (path_remove_dir(argv[2])) {
             path_save();
         } else {
             print_error("export: directory not in PATH\n");
         }
     } else {
-        print_error("export: usage: export [add|remove] <dir>\n");
+        print_error("export: usage: export [dump | add <dir> | remove <dir>]\n");
     }
 }
 
@@ -334,7 +410,7 @@ static void path_save(void) {
     if (!resolve_file_path("/path.env", &parent_inode, name)) {
         return;
     }
-    uint32_t len = path_env_len;
+    uint32_t len = path_text_length();
     if (len > MAX_FILE_SIZE) {
         return;
     }
@@ -349,7 +425,13 @@ static void path_save(void) {
     };
     call_syscall(SYS_DELETE, (uint32_t)&request, 0, 0);
     if (len > 0) {
-        write_file(parent_inode, name, (const uint8_t *)path_env, len);
+        char *text = (char *)sys_malloc(len + 1u);
+        if (text == NULL) {
+            return;
+        }
+        path_join(text);
+        write_file(parent_inode, name, (const uint8_t *)text, len);
+        sys_free(text);
     }
 }
 
@@ -362,7 +444,10 @@ static void path_load(void) {
         return;
     }
     file_buffer[size] = '\0';
-    (void)path_env_set((char *)file_buffer);
+    path_set_from_text((char *)file_buffer);
+    if (path_count == 0u) {
+        path_env_init();
+    }
 }
 
 static uint32_t text_length(const char *text) {
@@ -773,7 +858,7 @@ static uint32_t autocomplete(char *buffer, uint32_t index) {
         "help", "clear", "ls", "cd", "mkdir", "rmdir", "rm",
         "cat", "cp", "mv", "find", "grep", "ps", "kill", "exec",
         "time", "uptime", "shutdown", "exit", "export",
-        "echo", "hello", "clock", "badapple"
+        "echo", "hello", "clock", "badapple", "guess", "mouse"
     };
     uint32_t candidate_count = 0;
     for (uint32_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
@@ -1608,6 +1693,8 @@ static void print_help(void) {
     print_text_color("run a shell script\n", COLOR_DARK_GRAY);
     print_text_color("  time                    ", COLOR_WHITE);
     print_text_color("show current date and time\n", COLOR_DARK_GRAY);
+    print_text_color("  mouse                   ", COLOR_WHITE);
+    print_text_color("show mouse position and buttons\n", COLOR_DARK_GRAY);
     print_text_color("  uptime                  ", COLOR_WHITE);
     print_text_color("show uptime in ms\n", COLOR_DARK_GRAY);
     print_text_color("  shutdown                ", COLOR_WHITE);
@@ -1616,6 +1703,8 @@ static void print_help(void) {
     print_text_color("exit this process\n", COLOR_DARK_GRAY);
     print_text_color("  export [add|remove] dir ", COLOR_WHITE);
     print_text_color("manage PATH directories\n", COLOR_DARK_GRAY);
+    print_text_color("  export dump             ", COLOR_WHITE);
+    print_text_color("show the PATH dynamic array on the heap\n", COLOR_DARK_GRAY);
     print_text_color("  name [args...]          ", COLOR_WHITE);
     print_text_color("run a program found in PATH\n", COLOR_DARK_GRAY);
     print_text_color("  cmd1 | cmd2             ", COLOR_WHITE);
@@ -1629,11 +1718,13 @@ static void print_help(void) {
     print_text_color("background clock (stop: kill clock)\n", COLOR_DARK_GRAY);
     print_text_color("  badapple [file]         ", COLOR_WHITE);
     print_text_color("play Bad Apple!! (stop: Ctrl+C or q)\n", COLOR_DARK_GRAY);
+    print_text_color("  guess                   ", COLOR_WHITE);
+    print_text_color("number guessing game (shell waits for it)\n", COLOR_DARK_GRAY);
     print_text_color("Keys:\n", COLOR_GREEN);
     print_text_color("  Up / Down               ", COLOR_WHITE);
     print_text_color("recent commands\n", COLOR_DARK_GRAY);
     print_text_color("  PageUp / PageDown       ", COLOR_WHITE);
-    print_text_color("scroll the screen\n", COLOR_DARK_GRAY);
+    print_text_color("scroll the screen (mouse wheel too)\n", COLOR_DARK_GRAY);
     print_text_color("  Ctrl+C                  ", COLOR_WHITE);
     print_text_color("cancel the line / stop the running program\n", COLOR_DARK_GRAY);
     print_text_color("  Tab                     ", COLOR_WHITE);
@@ -1738,6 +1829,22 @@ static void execute_command(char *argv[], uint32_t argc) {
         }
     } else if (text_equal(command, "exec") && argc >= 2) {
         command_exec(argc - 1u, &argv[1]);
+    } else if (text_equal(command, "mouse") && argc == 1) {
+        uint32_t state = sys_mouse_get();
+        if ((state & 0x01000000u) == 0u) {
+            print_error("mouse: no PS/2 mouse detected\n");
+        } else {
+            uint32_t buttons = (state >> 16) & 0xFFu;
+            print_text_color("Mouse at column ", COLOR_DARK_GRAY);
+            print_number_color(state & 0xFFu, COLOR_WHITE);
+            print_text_color(", row ", COLOR_DARK_GRAY);
+            print_number_color((state >> 8) & 0xFFu, COLOR_WHITE);
+            print_text_color(", buttons: ", COLOR_DARK_GRAY);
+            print_text_color((buttons & 1u) ? "L" : "-", COLOR_WHITE);
+            print_text_color((buttons & 4u) ? "M" : "-", COLOR_WHITE);
+            print_text_color((buttons & 2u) ? "R" : "-", COLOR_WHITE);
+            print_char('\n');
+        }
     } else if (text_equal(command, "time") && argc == 1) {
         command_time();
     } else if (text_equal(command, "uptime") && argc == 1) {
